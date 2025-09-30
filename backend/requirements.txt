@@ -1,0 +1,38 @@
+# 필요한 패키지들
+
+# Web Framework
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.0
+pydantic-settings==2.6.0
+python-multipart==0.0.12
+
+# CORS
+fastapi-cors==0.0.6
+
+# Supabase
+supabase==2.9.0
+postgrest==0.17.0
+
+# LangChain & LLM
+langchain==0.3.7
+langchain-openai==0.2.8
+langchain-community==0.3.5
+openai==1.54.0
+
+# Vector Store & Embeddings
+sentence-transformers==3.2.0
+chromadb==0.5.11  # 로컬 테스트용 (나중에 제거 가능)
+
+# Database
+psycopg2-binary==2.9.10
+pgvector==0.3.5
+
+# Data Processing
+pandas==2.2.3
+openpyxl==3.1.5  # 엑셀 읽기/쓰기
+python-dotenv==1.0.1
+
+# Utilities
+python-jose[cryptography]==3.3.0  # JWT (필요시)
+redis==5.2.0  # 캐싱 (선택)
