@@ -24,7 +24,6 @@ CREATE TABLE curriculums (
     credit INTEGER NOT NULL,
     is_required_to_graduate BOOLEAN DEFAULT false,
     created_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(admission_year, course_code)
 );
 
 CREATE INDEX idx_curriculums_year_area ON curriculums(admission_year, course_area);
@@ -60,10 +59,7 @@ CREATE TABLE graduation_requirements (
     required_all TEXT[] DEFAULT '{}',
     required_one_of JSONB DEFAULT '[]',
     selectable_course_codes TEXT[] DEFAULT '{}',
-    notes TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
-    
-    UNIQUE(admission_year, course_area, requirement_type, track)
 );
 
 CREATE INDEX idx_graduation_year_area ON graduation_requirements(admission_year, course_area);
@@ -153,16 +149,16 @@ CREATE INDEX idx_labs_category ON laboratories(category);
 
 -- 4-3. 도서관 정보
 -- 1) 층별 공간 간단 소개
-DROP TABLE IF EXISTS library_place CASCADE;
-CREATE TABLE library_place (
-    id BIGSERIAL PRIMARY KEY,
-    name TEXT NOT NULL,    --'자료실', '미디어라운지', '열람실', '제1보존서고' 등
-    floor INT,             -- 1, 2, 3, 4
-    category TEXT,         -- 'service-desk','reading','storage' 등 (옵션)
-    intro TEXT,            -- name별 소개
-    is_active BOOLEAN DEFAULT true,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+DROP TABLE IF EXISTS library_hours CASCADE;
+CREATE TABLE IF NOT EXISTS library_hours (
+  id BIGSERIAL PRIMARY KEY,
+  place TEXT NOT NULL,
+  term TEXT NOT NULL,            -- 'regular'(학기중), 'vacation'(방학중)
+  day_scope TEXT NOT NULL,       -- 'weekday', 'weekend', 'holiday', 'wed' 등
+  open_time TIME,
+  close_time TIME,
+  is_closed BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT now()
 );
 
 
@@ -177,7 +173,7 @@ ALTER TABLE graduation_requirements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE academic_calendar ENABLE ROW LEVEL SECURITY;
 ALTER TABLE laboratories ENABLE ROW LEVEL SECURITY;
-ALTER TABLE library_place ENABLE ROW LEVEL SECURITY;
+ALTER TABLE library_hours ENABLE ROW LEVEL SECURITY;
 
 -- 모든 사용자 읽기 허용
 CREATE POLICY "Public read access" ON curriculums FOR SELECT USING (true);
@@ -186,4 +182,4 @@ CREATE POLICY "Public read access" ON graduation_requirements FOR SELECT USING (
 CREATE POLICY "Public read access" ON documents FOR SELECT USING (true);
 CREATE POLICY "Public read access" ON academic_calendar FOR SELECT USING (true);
 CREATE POLICY "Public read access" ON laboratories FOR SELECT USING (true);
-CREATE POLICY "Public read access" ON library_place FOR SELECT USING (true);
+CREATE POLICY "Public read access" ON library_hours FOR SELECT USING (true);

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     # Supabase
     supabase_url: str
     supabase_key: str
+    supabase_service_key: str
     
     # LangSmith (선택)
     langchain_tracing_v2: bool = False
