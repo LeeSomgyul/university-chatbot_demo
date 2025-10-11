@@ -18,12 +18,15 @@ class QueryRouter:
     
     # 일반 정보 키워드 (벡터 검색)
     GENERAL_KEYWORDS = [
-        '도서관', '연락처', '전화', '위치', '실험실', 
+        '도서관', '책', '대출', '반납', '빌려', '빌릴',
+        '열람실', '자료관', '미디어라운지',
+        '연락처', '전화', '위치', '실험실', 
         '교수', '운영시간', 
         '개강', '종강', '중간고사', '기말고사',  
         '학사일정', '시험', '방학', '일정',
         '장학금', '버스', '통학',
-        '끝나', '시작'
+        '끝나', '시작',
+        '졸업생', '휴학생', '지역주민'
     ]
     
     def classify(self, query: str) -> Literal["curriculum", "general", "hybrid"]:
@@ -35,12 +38,25 @@ class QueryRouter:
         """
         query_lower = query.lower()
         
-        schedule_keywords = ['개강', '종강', '중간고사', '기말고사', '시험', '방학', '끝나', '시작']
-        if any(kw in query_lower for kw in schedule_keywords):
-            # 개인 지시어가 없으면 무조건 general
+        # 1. 도서관 관련 최우선 체크
+        library_keywords = ['도서관', '책', '대출', '반납', '빌려', '빌릴', '열람실', '자료관']
+        if any(kw in query_lower for kw in library_keywords):
+            # 개인 지시어 없으면 무조건 general
             has_personal = any(word in query for word in ['나는', '내가', '저는', '제가', '나', '내'])
             if not has_personal:
                 return "general"
+        
+        # 2. 명확한 학사일정 키워드 체크
+        schedule_keywords = ['개강', '종강', '중간고사', '기말고사', '시험', '방학', '끝나', '시작']
+        if any(kw in query_lower for kw in schedule_keywords):
+            has_personal = any(word in query for word in ['나는', '내가', '저는', '제가', '나', '내'])
+            if not has_personal:
+                return "general"
+        
+        # 3. 이용 자격 질문 (졸업생, 휴학생 등)
+        eligibility_keywords = ['졸업생', '휴학생', '지역주민', '외부인']
+        if any(kw in query for kw in eligibility_keywords):
+            return "general"
         
         has_personal = any(word in query for word in ['나는', '내가', '저는', '제가', '우리'])
         has_curriculum = any(kw in query_lower for kw in self.CURRICULUM_KEYWORDS)
