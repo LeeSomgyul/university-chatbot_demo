@@ -10,16 +10,20 @@ class QueryRouter:
     
     # 교육과정 관련 키워드
     CURRICULUM_KEYWORDS = [
-        '학점', '과목', '수강', '졸업', '이수', 
-        '전공필수', '전공선택', '교양', '남은', '들었',
-        '커리큘럼', '교육과정', '필수과목', '선택과목'
+        '남은', '들었', '이수했', '수강했',
+        '전공필수', '전공선택', '교양필수', '교양선택',
+        '졸업', '학점 계산', '커리큘럼',
+        '나는', '내가', '저는', '제가', '우리'
     ]
     
     # 일반 정보 키워드 (벡터 검색)
     GENERAL_KEYWORDS = [
         '도서관', '연락처', '전화', '위치', '실험실', 
-        '교수', '운영시간', '학사일정', '개강', '종강',
-        '중간고사', '기말고사', '시험', '방학'
+        '교수', '운영시간', 
+        '개강', '종강', '중간고사', '기말고사',  
+        '학사일정', '시험', '방학', '일정',
+        '장학금', '버스', '통학',
+        '끝나', '시작'
     ]
     
     def classify(self, query: str) -> Literal["curriculum", "general", "hybrid"]:
@@ -31,8 +35,22 @@ class QueryRouter:
         """
         query_lower = query.lower()
         
+        schedule_keywords = ['개강', '종강', '중간고사', '기말고사', '시험', '방학', '끝나', '시작']
+        if any(kw in query_lower for kw in schedule_keywords):
+            # 개인 지시어가 없으면 무조건 general
+            has_personal = any(word in query for word in ['나는', '내가', '저는', '제가', '나', '내'])
+            if not has_personal:
+                return "general"
+        
+        has_personal = any(word in query for word in ['나는', '내가', '저는', '제가', '우리'])
         has_curriculum = any(kw in query_lower for kw in self.CURRICULUM_KEYWORDS)
         has_general = any(kw in query_lower for kw in self.GENERAL_KEYWORDS)
+        
+        if has_personal and has_curriculum:
+            return "curriculum"
+
+        if has_general:
+            return "general"
         
         if has_curriculum and has_general:
             return "hybrid"
@@ -44,7 +62,7 @@ class QueryRouter:
     def needs_user_profile(self, query: str) -> bool:
         """사용자 프로필이 필요한 질문인지 확인"""
         personal_indicators = [
-            '나', '내가', '저', '제가', '우리',
+            '나는', '내가', '저는', '제가', '우리',
             '남은', '들었', '이수했', '수강했'
         ]
         return any(indicator in query for indicator in personal_indicators)

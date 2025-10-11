@@ -208,4 +208,67 @@ class SchoolChatbot:
         except Exception as e:
             print(f"❌ LLM 호출 실패: {e}")
             # LLM 실패 시 계산 결과만 반환
+            
+    # app/services/chatbot.py에서 확인
+
+    def _handle_hybrid_query(
+        self,
+        message: str,
+        user_profile: Optional[UserProfile]
+    ) -> Dict[str, Any]:
+        """복합 질문 처리 (벡터 + SQL)"""
+        
+        # 1. 벡터 검색
+        search_results = self.vector_service.search(message, k=2)
+        context = self.vector_service.format_search_results(search_results)
+        
+        # 2. 교육과정 정보 (프로필이 있으면)
+        curriculum_info = ""
+        if user_profile:
+            calculation = curriculum_service.calculate_remaining_credits(user_profile)
+            if 'error' not in calculation:
+                curriculum_info = curriculum_service.format_curriculum_info(calculation)
+        
+        # 3. LLM으로 통합 답변
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """당신은 순천대학교 컴퓨터공학과 종합 안내 챗봇입니다.
+            학교 정보와 학생의 개인 학사 정보를 종합해 답변해주세요.
+
+            학교 정보:
+            {context}
+
+            {curriculum_section}
+
+            답변 규칙:
+            1. 두 가지 정보를 자연스럽게 연결해 답변하세요
+            2. 학생의 상황에 맞는 조언을 제공하세요
+            3. 친절하고 격려하는 톤을 유지하세요
+            """),
+                    ("user", "{question}")
+        ])
+        
+        curriculum_section = ""
+        if curriculum_info:
+            curriculum_section = f"학생 졸업요건 현황:\n{curriculum_info}"
+        
+        llm = self._get_llm()
+        chain = prompt | llm
+        
+        try:
+            response = chain.invoke({
+                "context": context,
+                "curriculum_section": curriculum_section,
+                "question": message
+            })
+            answer = response.content
+        except Exception as e:
+            print(f"❌ LLM 호출 실패: {e}")
+            answer = f"{context}\n\n{curriculum_info}" if curriculum_info else context
+        
+        return {
+            "message": answer,
+            "query_type": "hybrid",
+            "sources": search_results,
+            "needs_profile": False
+        }
 chatbot = SchoolChatbot()

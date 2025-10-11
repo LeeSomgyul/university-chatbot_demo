@@ -26,26 +26,24 @@ class EmbeddingCreator:
         print("✅ 모델 로딩 완료")
     
     def load_from_text_file(self, file_path: str) -> List[Dict]:
-        """
-        텍스트 파일에서 데이터 로드
-        형식:
-        ===CATEGORY: 카테고리명
-        ===TITLE: 제목
-        본문 내용...
-        """
         documents = []
         current_doc = {}
         content_lines = []
         
         with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.rstrip()  # 오른쪽 공백만 제거
+            lines = f.readlines()
+            print(f"  총 라인 수: {len(lines)}")  # 디버깅
+            
+            for idx, line in enumerate(lines):
+                line = line.rstrip()
                 
                 if line.startswith('===CATEGORY:'):
+                    print(f"  라인 {idx}: CATEGORY 발견")  # 디버깅
                     # 이전 문서 저장
                     if current_doc and content_lines:
                         current_doc['content'] = '\n'.join(content_lines).strip()
                         documents.append(current_doc)
+                        print(f"    문서 저장됨: {current_doc['metadata'].get('title', 'NO TITLE')}")  # 디버깅
                     
                     # 새 문서 시작
                     current_doc = {
@@ -58,13 +56,14 @@ class EmbeddingCreator:
                 elif line.startswith('===TITLE:'):
                     current_doc['metadata']['title'] = line.replace('===TITLE:', '').strip()
                 
-                elif line:  # 빈 줄이 아니면
+                elif line:
                     content_lines.append(line)
         
         # 마지막 문서 저장
         if current_doc and content_lines:
             current_doc['content'] = '\n'.join(content_lines).strip()
             documents.append(current_doc)
+            print(f"  마지막 문서 저장됨: {current_doc['metadata'].get('title', 'NO TITLE')}")
         
         return documents
     
@@ -238,6 +237,23 @@ def main():
     # 데이터 디렉토리
     text_data_dir = Path(__file__).parent / "text_data"
     
+    # 사용자에게 선택 옵션 제공
+    print("\n업로드 모드를 선택하세요:")
+    print("1. 전체 재업로드 (기존 데이터 삭제 후 전체 업로드)")
+    print("2. 증분 업로드 (기존 데이터 유지하고 새 데이터만 추가)")
+    
+    choice = input("\n선택 (1 또는 2): ").strip()
+    
+    if choice == "1":
+        clear_existing = True
+        print("\n✅ 전체 재업로드 모드")
+    elif choice == "2":
+        clear_existing = False
+        print("\n✅ 증분 업로드 모드")
+    else:
+        print("\n❌ 잘못된 선택. 기본값(증분 업로드) 사용")
+        clear_existing = False
+    
     # 1. text_data 디렉토리의 모든 .txt 파일 로드
     print(f"\n📂 {text_data_dir} 디렉토리에서 텍스트 파일 로드 중...")
     text_documents = creator.load_from_directory(text_data_dir)
@@ -288,11 +304,9 @@ def main():
     print("=" * 60)
     
     test_queries = [
-        "도서관 운영시간 알려줘",
-        "2025년 1학기 개강일은?",
-        "컴퓨터비전 연구실에 대해 알려줘",
-        "실험실 교수님 연락처",
-        "중간고사는 언제야?",
+        "광주에서 학교 가는 통학버스 시간 알려줘",
+        "통학버스 예약은 어떻게 해?",
+        "순천 통학버스 노선 알려줘"
     ]
     
     for query in test_queries:
