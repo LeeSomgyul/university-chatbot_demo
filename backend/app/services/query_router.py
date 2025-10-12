@@ -20,7 +20,7 @@ class QueryRouter:
     GENERAL_KEYWORDS = [
         '도서관', '책', '대출', '반납', '빌려', '빌릴',
         '열람실', '자료관', '미디어라운지',
-        '연락처', '전화', '위치', '실험실', 
+        '연락처', '전화', '위치', '실험실', '문의',
         '교수', '운영시간', 
         '개강', '종강', '중간고사', '기말고사',  
         '학사일정', '시험', '방학', '일정',
@@ -57,6 +57,22 @@ class QueryRouter:
         eligibility_keywords = ['졸업생', '휴학생', '지역주민', '외부인']
         if any(kw in query for kw in eligibility_keywords):
             return "general"
+        
+        # 4. 연락처/문의 최우선 체크 (새로 추가!)
+        contact_keywords = ['연락처', '전화', '문의', '어디', '몇 번', '번호']
+        if any(kw in query for kw in contact_keywords):
+            has_personal = any(word in query for word in ['나는', '내가', '저는', '제가', '나', '내', '우리'])
+            if not has_personal:
+                return "general"
+            
+        # 5. 졸업 관련 구분
+        if '졸업' in query:
+            # "졸업 문의", "졸업 신청 어디", "졸업 연락처" → general
+            if any(kw in query for kw in ['문의', '어디', '연락처', '전화', '신청 어디', '어떻게']):
+                return "general"
+            # "졸업 학점", "졸업 요건", "졸업까지" → curriculum (개인정보 필요)
+            elif any(kw in query for kw in ['학점', '요건', '남았', '까지', '조건']):
+                return "curriculum"
         
         has_personal = any(word in query for word in ['나는', '내가', '저는', '제가', '우리'])
         has_curriculum = any(kw in query_lower for kw in self.CURRICULUM_KEYWORDS)

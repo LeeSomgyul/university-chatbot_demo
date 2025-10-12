@@ -1,4 +1,3 @@
-# backend/app/services/curriculum_service.py
 """
 교육과정 계산 서비스
 """
