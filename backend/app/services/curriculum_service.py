@@ -113,12 +113,44 @@ class CurriculumService:
         
         Args:
             course_area: "전공" or "교양"
-            requirement_type: "전공선택", "심화교양" 등
+            requirement_type: "전공선택", "심화교양", "추가선택" 등
         
         Returns:
             과목 코드 리스트 ["CS0855", "CS0860", ...]
         """
         try:
+            #추가선택인 경우 특별 처리
+            if requirement_type == '추가선택':
+                codes = []
+                
+                # 브릿지 과목 (기초교양/브릿지)
+                bridge_result = supabase.table('curriculums')\
+                    .select('course_code')\
+                    .eq('admission_year', admission_year)\
+                    .eq('course_area', '교양')\
+                    .eq('requirement_type', '기초교양')\
+                    .eq('track', '브릿지')\
+                    .execute()
+                
+                if bridge_result.data:
+                    codes.extend([row['course_code'] for row in bridge_result.data if row['course_code']])
+                
+                # 자유선택 과목 (창의교양/자유선택*)
+                free_result = supabase.table('curriculums')\
+                    .select('course_code')\
+                    .eq('admission_year', admission_year)\
+                    .eq('course_area', '교양')\
+                    .eq('requirement_type', '창의교양')\
+                    .like('track', '자유선택%')\
+                    .execute()
+                
+                if free_result.data:
+                    codes.extend([row['course_code'] for row in free_result.data if row['course_code']])
+                
+                # 중복 제거
+                return list(set(codes))
+            
+            #기존 로직 (일반 경우)
             result = supabase.table('curriculums')\
                 .select('course_code')\
                 .eq('admission_year', admission_year)\

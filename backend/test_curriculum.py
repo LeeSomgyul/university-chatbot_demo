@@ -68,6 +68,71 @@ SAMPLE_USER_2 = UserProfile(
     ]
 )
 
+SAMPLE_USER_2025_1 = UserProfile(
+    admission_year=2025,
+    current_semester=2,
+    courses_taken=[
+        # 기초교양-필수 3과목
+        CourseInput(
+            course_code="XG1100",
+            course_name="명저 읽기",
+            credit=2,
+            course_area="교양",
+            requirement_type="기초교양"
+        ),
+        CourseInput(
+            course_code="XG0701",
+            course_name="사고와글쓰기",
+            credit=2,
+            course_area="교양",
+            requirement_type="기초교양"
+        ),
+        CourseInput(
+            course_code="XG1004",
+            course_name="데이터와 코딩",
+            credit=2,
+            course_area="교양",
+            requirement_type="기초교양"
+        ),
+        # 전공필수 1과목
+        CourseInput(
+            course_code="CS0614",
+            course_name="컴퓨터과학",
+            credit=3,
+            course_area="전공",
+            requirement_type="전공필수"
+        ),
+    ]
+)
+
+# 샘플 사용자 4: 2025학번 3학년 (많이 이수)
+SAMPLE_USER_2025_2 = UserProfile(
+    admission_year=2025,
+    current_semester=2,
+    courses_taken=[
+        # 기초교양
+        CourseInput(course_code="XG1100", course_name="명저 읽기", credit=2, course_area="교양", requirement_type="기초교양"),
+        CourseInput(course_code="XG0701", course_name="사고와글쓰기", credit=2, course_area="교양", requirement_type="기초교양"),
+        CourseInput(course_code="XG1004", course_name="데이터와 코딩", credit=2, course_area="교양", requirement_type="기초교양"),
+        CourseInput(course_code="XG0717", course_name="커뮤니케이션영어", credit=2, course_area="교양", requirement_type="기초교양"),
+        CourseInput(course_code="XG1139", course_name="디지털 추론과 문제해결", credit=2, course_area="교양", requirement_type="기초교양"),
+        
+        # 창의교양
+        CourseInput(course_code="XG1138", course_name="대학생활", credit=1, course_area="교양", requirement_type="창의교양"),
+        CourseInput(course_code="XG0801", course_name="흙에서배우는삶의지혜", credit=2, course_area="교양", requirement_type="창의교양"),
+        CourseInput(course_code="XG1157", course_name="미래 설계 I", credit=2, course_area="교양", requirement_type="창의교양"),
+        
+        # 전공필수
+        CourseInput(course_code="CS0614", course_name="컴퓨터과학", credit=3, course_area="전공", requirement_type="전공필수"),
+        CourseInput(course_code="CS0623", course_name="이산수학", credit=3, course_area="전공", requirement_type="전공필수"),
+        CourseInput(course_code="CS0603", course_name="자료구조", credit=3, course_area="전공", requirement_type="전공필수"),
+        
+        # 전공선택
+        CourseInput(course_code="CS0855", course_name="고급컴퓨터프로그래밍", credit=3, course_area="전공", requirement_type="전공선택"),
+        CourseInput(course_code="CS0860", course_name="어드벤쳐디자인", credit=3, course_area="전공", requirement_type="전공선택"),
+    ]
+)
+
 
 # ===== 테스트 케이스 =====
 
@@ -118,6 +183,30 @@ CURRICULUM_TESTS = [
         "evaluation": lambda result: "졸업 요건 현황" in result and "전공" in result,
         "expected": "포맷팅된 문자열 반환"
     },
+    
+    {
+        "id": 6,
+        "name": "2025학번 졸업사정 (1학년)",
+        "test_func": lambda: curriculum_service.calculate_remaining_credits(SAMPLE_USER_2025_1),
+        "evaluation": lambda result: (
+            'error' not in result and 
+            result['admission_year'] == 2025 and
+            result['total_taken'] == 9  # 기초교양 6 + 전공 3
+        ),
+        "expected": "2025학번 9학점 이수"
+    },
+    
+    {
+        "id": 7,
+        "name": "2025학번 졸업사정 (3학년)",
+        "test_func": lambda: curriculum_service.calculate_remaining_credits(SAMPLE_USER_2025_2),
+        "evaluation": lambda result: (
+            'error' not in result and 
+            result['admission_year'] == 2025 and
+            result['total_taken'] >= 30
+        ),
+        "expected": "2025학번 30학점 이상 이수"
+    },
 ]
 
 
@@ -163,29 +252,63 @@ def test_sample_scenarios():
     print("📝 샘플 시나리오 테스트")
     print("=" * 70)
     
-    # 시나리오 1: 1학년 학생
-    print("\n▶️ 시나리오 1: 1학년 학생 (7학점 이수)")
+    # ===== 2024학번 테스트 =====
+    
+    print("\n" + "🎓 2024학번 테스트")
+    print("=" * 70)
+    
+    # 시나리오 1: 2024학번 1학년
+    print("\n▶️ 시나리오 1: 2024학번 1학년 (6학점 이수)")
     print("-" * 70)
     result1 = curriculum_service.calculate_remaining_credits(SAMPLE_USER_1)
     formatted1 = curriculum_service.format_curriculum_info(result1)
     print(formatted1)
     
-    # 시나리오 2: 3학년 학생
-    print("\n▶️ 시나리오 2: 3학년 학생 (30+학점 이수)")
+    # 시나리오 2: 2024학번 3학년
+    print("\n▶️ 시나리오 2: 2024학번 3학년 (33학점 이수)")
     print("-" * 70)
     result2 = curriculum_service.calculate_remaining_credits(SAMPLE_USER_2)
     formatted2 = curriculum_service.format_curriculum_info(result2)
     print(formatted2)
     
-    # 시나리오 3: 미이수 과목 조회
-    print("\n▶️ 시나리오 3: 미이수 전공필수 과목")
+    # 시나리오 3: 2024학번 미이수 과목
+    print("\n▶️ 시나리오 3: 2024학번 미이수 전공필수 과목")
     print("-" * 70)
-    not_taken = curriculum_service.get_courses_not_taken(SAMPLE_USER_1, "전공필수")
-    print(f"총 {len(not_taken)}개 과목")
-    for i, course in enumerate(not_taken[:5], 1):
+    not_taken1 = curriculum_service.get_courses_not_taken(SAMPLE_USER_1, "전공필수")
+    print(f"총 {len(not_taken1)}개 과목")
+    for i, course in enumerate(not_taken1[:5], 1):
         print(f"  {i}. {course['course_name']} ({course['course_code']}) - {course['credit']}학점 - {course['grade']}학년 {course['semester']}학기")
-    if len(not_taken) > 5:
-        print(f"  ... 외 {len(not_taken) - 5}개")
+    if len(not_taken1) > 5:
+        print(f"  ... 외 {len(not_taken1) - 5}개")
+    
+    # ===== 2025학번 테스트 =====
+    
+    print("\n" + "🎓 2025학번 테스트")
+    print("=" * 70)
+    
+    # 시나리오 4: 2025학번 1학년
+    print("\n▶️ 시나리오 4: 2025학번 1학년 (9학점 이수)")
+    print("-" * 70)
+    result3 = curriculum_service.calculate_remaining_credits(SAMPLE_USER_2025_1)
+    formatted3 = curriculum_service.format_curriculum_info(result3)
+    print(formatted3)
+    
+    # 시나리오 5: 2025학번 3학년
+    print("\n▶️ 시나리오 5: 2025학번 3학년 (30+학점 이수)")
+    print("-" * 70)
+    result4 = curriculum_service.calculate_remaining_credits(SAMPLE_USER_2025_2)
+    formatted4 = curriculum_service.format_curriculum_info(result4)
+    print(formatted4)
+    
+    # 시나리오 6: 2025학번 미이수 과목
+    print("\n▶️ 시나리오 6: 2025학번 미이수 전공필수 과목")
+    print("-" * 70)
+    not_taken2 = curriculum_service.get_courses_not_taken(SAMPLE_USER_2025_1, "전공필수")
+    print(f"총 {len(not_taken2)}개 과목")
+    for i, course in enumerate(not_taken2[:5], 1):
+        print(f"  {i}. {course['course_name']} ({course['course_code']}) - {course['credit']}학점 - {course['grade']}학년 {course['semester']}학기")
+    if len(not_taken2) > 5:
+        print(f"  ... 외 {len(not_taken2) - 5}개")
 
 
 def main():
