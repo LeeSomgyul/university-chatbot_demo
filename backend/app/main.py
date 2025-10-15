@@ -15,6 +15,7 @@ from app.models.schemas import (
 )
 from app.models.session import session_store
 from app.services.chatbot import chatbot
+from app.routes import graduation
 
 
 # 앱 시작/종료 이벤트
@@ -49,6 +50,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(graduation.router)
+
 
 @app.get("/", response_model=HealthCheck)
 async def root():
@@ -70,35 +73,17 @@ async def health_check():
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """
-    챗봇 대화 엔드포인트
-    
-    Request:
-        - message: 사용자 메시지
-        - session_id: 세션 ID (없으면 새로 생성)
-        - user_profile: 사용자 프로필 (학번, 수강이력)
-        - history: 대화 히스토리
-    
-    Response:
-        - message: 챗봇 답변
-        - query_type: 질문 유형
-        - sources: 출처 정보
-        - session_id: 세션 ID
-    """
+    """챗봇 대화 엔드포인트"""
     try:
-        # 세션 관리
+        # 세션 관리 (기존 코드)
         session_id = request.session_id
         if not session_id:
-            # 새 세션 생성
             session_id = session_store.create_session(request.user_profile)
         else:
-            # 기존 세션 확인
             session = session_store.get_session(session_id)
             if not session:
-                # 세션이 만료되었으면 새로 생성
                 session_id = session_store.create_session(request.user_profile)
             elif request.user_profile:
-                # 프로필 업데이트
                 session_store.update_profile(session_id, request.user_profile)
         
         # 세션에서 사용자 프로필 가져오기
@@ -112,7 +97,12 @@ async def chat(request: ChatRequest):
             history=request.history
         )
         
-        # 세션에 메시지 저장
+        # ⭐ 챗봇이 UserProfile을 생성했다면 세션에 저장
+        # (result에 'user_profile'이 포함되어 있으면)
+        if 'user_profile' in result and result['user_profile']:
+            session_store.update_profile(session_id, result['user_profile'])
+        
+        # 세션에 메시지 저장 (기존 코드)
         session_store.add_message(session_id, {
             "role": "user",
             "content": request.message,

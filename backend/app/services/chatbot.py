@@ -5,10 +5,11 @@ from typing import Dict, Any, Optional, List
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from app.config import settings
-from app.models.schemas import UserProfile, ChatMessage
+from app.models.schemas import UserProfile, ChatMessage, CourseInput
 from app.services.query_router import query_router
 from app.services.vector_service import get_vector_service
 from app.services.curriculum_service import curriculum_service
+from app.services.entity_extractor import entity_extractor
 
 
 class SchoolChatbot:
@@ -36,44 +37,62 @@ class SchoolChatbot:
         user_profile: Optional[UserProfile] = None,
         history: List[ChatMessage] = None
     ) -> Dict[str, Any]:
-        """
-        메인 챗봇 로직
+        """메인 챗봇 로직"""
         
-        Args:
-            message: 사용자 메시지
-            user_profile: 사용자 프로필 (학번, 수강이력 등)
-            history: 대화 히스토리
-        
-        Returns:
-            {
-                "message": "답변",
-                "query_type": "general|curriculum|hybrid",
-                "sources": [...],
-                "needs_profile": False
-            }
-        """
         # 1. 질문 분류
         query_type = query_router.classify(message)
         needs_profile = query_router.needs_user_profile(message)
         
-        # 2. 사용자 프로필 필요한데 없으면 요청
-        if needs_profile and not user_profile:
-            return {
-                "message": "개인 맞춤 답변을 위해 학번과 수강 이력을 먼저 알려주세요. 😊",
-                "query_type": query_type,
-                "sources": [],
-                "needs_profile": True
-            }
+        print(f"\n🔍 디버깅:")
+        print(f"  메시지: {message}")
+        print(f"  query_type: {query_type}")
+        print(f"  user_profile: {user_profile}")
+        print(f"  needs_profile: {needs_profile}")
         
-        # 3. 질문 유형별 처리
         if query_type == "curriculum":
+            extracted = entity_extractor.extract_course_info(message)
+            print(f"  extracted: {extracted}")
+            
+            # 정보가 충분하면 UserProfile 생성
+            if extracted['has_enough_info']:
+                user_profile = UserProfile(
+                    admission_year=extracted['admission_year'],
+                    courses_taken=extracted['courses']
+                )
+                
+                print(f"✅ UserProfile 자동 생성: {extracted['admission_year']}학번, {len(extracted['courses'])}과목")
+            
+            # 여전히 정보 부족하면 안내
+            elif not user_profile:
+                missing = []
+                if not extracted['admission_year']:
+                    missing.append("입학년도")
+                if not extracted['course_codes']:
+                    missing.append("이수 과목")
+                
+                return {
+                    "message": f"""개인 맞춤 답변을 위해 정보가 필요해요! 😊
+
+                    다음 정보를 알려주세요:
+                    {'📅 입학년도 (예: 2024학번)' if '입학년도' in missing else ''}
+                    {'📚 이수한 과목 코드 (예: CS0614, XG0800)' if '이수 과목' in missing else ''}
+
+                    예시: "2024학번이고 CS0614, XG0800 들었어"
+                    """,
+                                        "query_type": query_type,
+                                        "sources": [],
+                                        "needs_profile": True
+                }
+                
             return self._handle_curriculum_query(message, user_profile)
         
+        # 3. 질문 유형별 처리 (기존 코드)      
         elif query_type == "general":
             return self._handle_general_query(message)
         
         else:  # hybrid
             return self._handle_hybrid_query(message, user_profile)
+            
     
     def _handle_general_query(self, message: str) -> Dict[str, Any]:
         """일반 정보 질문 처리 (벡터 검색)"""
@@ -135,9 +154,9 @@ class SchoolChatbot:
         message: str, 
         user_profile: UserProfile
     ) -> Dict[str, Any]:
-        """교육과정 질문 처리 (SQL 계산)"""
+        """교육과정 질문 처리 (하이브리드)"""
         
-        # 남은 학점 계산
+        # 1. 남은 학점 계산
         calculation = curriculum_service.calculate_remaining_credits(user_profile)
         
         if 'error' in calculation:
@@ -148,48 +167,99 @@ class SchoolChatbot:
                 "needs_profile": False
             }
         
-        # 계산 결과 포맷팅
-        curriculum_info = curriculum_service.format_curriculum_info(calculation)
+        # 2. 포맷팅된 결과
+        formatted_info = curriculum_service.format_curriculum_info(calculation)
         
-        # 특정 영역 과목 목록이 필요한지 판단
-        course_list = ""
-        if any(kw in message for kw in ['과목', '무엇', '뭐', '어떤', '남았']):
-            # 질문에서 영역 추출 시도
-            area = None
-            if '전공필수' in message:
-                area = '전공필수'
-            elif '전공선택' in message:
-                area = '전공선택'
-            elif '교양' in message:
-                area = '교양필수'
+        # 3. 간단한 질문인지 판단
+        simple_keywords = [
+            '남은', '얼마', '몇', '진행', '현황', '학점', '상태',
+            '남았', '이수', '들었', '완료'
+        ]
+        
+        is_simple = any(kw in message for kw in simple_keywords)
+        
+        # 복잡한 질문 키워드
+        complex_keywords = [
+            '졸업', '가능', '추천', '어떤', '무엇', '뭐',
+            '해야', '하면', '좋', '조언', '도움'
+        ]
+        
+        is_complex = any(kw in message for kw in complex_keywords)
+        
+        # 4-A. 간단한 질문 → 포맷팅만 반환
+        if is_simple and not is_complex:
+            print("  → 간단한 질문: 포맷팅만 반환")
             
-            if area:
-                not_taken = curriculum_service.get_courses_not_taken(user_profile, area)
+            # 미이수 과목 추가 (요청 시)
+            additional_info = ""
+            if any(kw in message for kw in ['과목', '뭐', '어떤']):
+                not_taken = curriculum_service.get_required_courses_not_taken(
+                    user_profile,
+                    course_area="전공",
+                    requirement_type="전공필수"
+                )
+                
                 if not_taken:
-                    course_list = f"\n\n📚 아직 안 들은 {area} 과목:\n"
-                    for course in not_taken[:10]:  # 최대 10개만
-                        course_list += f"- {course['course_name']} ({course['credit']}학점)\n"
+                    formatted_not_taken = curriculum_service.format_not_taken_courses(not_taken)
+                    additional_info = "\n\n" + formatted_not_taken
+            
+            return {
+                "message": formatted_info + additional_info,
+                "query_type": "curriculum",
+                "sources": [],
+                "needs_profile": False
+            }
         
-        # LLM으로 자연스러운 답변 생성
+        # 4-B. 복잡한 질문 → LLM 사용
+        print("  → 복잡한 질문: LLM 사용")
+        
+        # 미이수 과목 정보
+        not_taken_info = ""
+        if any(kw in message for kw in ['과목', '무엇', '뭐', '어떤', '남았', '필수']):
+            # 질문에서 영역 추출
+            area = None
+            req_type = None
+            
+            if '전공필수' in message:
+                area = "전공"
+                req_type = "전공필수"
+            elif '전공선택' in message:
+                area = "전공"
+                req_type = "전공선택"
+            elif '교양' in message:
+                area = "교양"
+            
+            not_taken = curriculum_service.get_required_courses_not_taken(
+                user_profile,
+                course_area=area,
+                requirement_type=req_type
+            )
+            
+            if not_taken:
+                not_taken_info = "\n\n📚 미이수 과목:\n"
+                for course in not_taken[:10]:  # 최대 10개
+                    not_taken_info += f"- {course['course_name']} ({course['credit']}학점)"
+                    if course.get('recommended_semester'):
+                        not_taken_info += f" [권장: {course['grade']}학년 {course['semester']}학기]"
+                    not_taken_info += "\n"
+        
+        # LLM 프롬프트
         prompt = ChatPromptTemplate.from_messages([
             ("system", """당신은 순천대학교 컴퓨터공학과 학사 상담 챗봇입니다.
-            학생의 졸업요건과 수강이력을 바탕으로 친절하게 안내해주세요.
 
-            답변 규칙:
-            1. 계산된 정보를 바탕으로 답변하세요
-            2. 학생을 격려하고 응원하는 톤을 유지하세요
-            3. 구체적인 숫자와 정보를 포함하세요
-            4. 필요시 다음 수강 추천도 해주세요
+    주어진 졸업요건 현황을 **정확히** 바탕으로 학생의 질문에 답변하세요.
 
-            학생 정보:
-            - 학번: {admission_year}
-            - 트랙: {track}
+    ⚠️ 중요:
+    1. 아래 졸업요건 현황의 숫자를 정확히 사용하세요
+    2. 임의로 숫자를 만들거나 추측하지 마세요
+    3. 학생을 격려하고 응원하는 톤을 유지하세요
+    4. 구체적인 조언을 제공하세요
 
-            졸업요건 현황:
-            {curriculum_info}
+    졸업요건 현황:
+    {formatted_info}
 
-            {course_list}
-            """),
+    {not_taken_info}
+    """),
             ("user", "{question}")
         ])
         
@@ -198,18 +268,23 @@ class SchoolChatbot:
         
         try:
             response = chain.invoke({
-                "admission_year": user_profile.admission_year,
-                "track": user_profile.track,
-                "curriculum_info": curriculum_info,
-                "course_list": course_list,
+                "formatted_info": formatted_info,
+                "not_taken_info": not_taken_info,
                 "question": message
             })
             answer = response.content
+            
         except Exception as e:
             print(f"❌ LLM 호출 실패: {e}")
-            # LLM 실패 시 계산 결과만 반환
-            
-    # app/services/chatbot.py에서 확인
+            # LLM 실패 시 포맷팅 결과 반환
+            answer = formatted_info + not_taken_info
+        
+        return {
+            "message": answer,
+            "query_type": "curriculum",
+            "sources": [],
+            "needs_profile": False
+        }
 
     def _handle_hybrid_query(
         self,
