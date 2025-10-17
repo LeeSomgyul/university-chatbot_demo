@@ -3,15 +3,15 @@
 """
 from typing import Dict, List, Any, Optional
 from app.database.supabase_client import supabase
-from app.models.schemas import UserProfile, CourseInput
-
+from app.models.schemas import UserProfile
 from app.services.equivalent_course_service import equivalent_course_service
+from app.rules.graduation_rules import get_rules, get_overflow_target_key
 
 
 class CurriculumService:
     """교육과정 계산 서비스"""
     
-    # 총 졸업 학점
+    # 총 졸업 학점 (기본값)
     TOTAL_GRADUATION_CREDITS = 140
     
     def get_graduation_requirements(
@@ -20,20 +20,6 @@ class CurriculumService:
     ) -> List[Dict[str, Any]]:
         """
         졸업요건 전체 조회
-        
-        Returns:
-            [
-                {
-                    "course_area": "교양",
-                    "requirement_type": "공통교양",
-                    "track": "기초",
-                    "required_credits": 7,
-                    "required_all": ["XG0800", ...],
-                    "required_one_of": ["XG0701", "XG0702"],
-                    "selectable_course_codes": [...]
-                },
-                ...
-            ]
         """
         try:
             result = supabase.table('graduation_requirements')\
@@ -65,8 +51,9 @@ class CurriculumService:
         except:
             pass
         
-        # 기본값
-        return self.TOTAL_GRADUATION_CREDITS
+        # 설정에서 가져오기
+        rules = get_rules(admission_year)
+        return rules.get('total_credits', self.TOTAL_GRADUATION_CREDITS)
     
     def get_curriculum(
         self,
@@ -76,14 +63,6 @@ class CurriculumService:
     ) -> List[Dict[str, Any]]:
         """
         교육과정 조회
-        
-        Args:
-            admission_year: 학번
-            course_area: "전공" 또는 "교양" (선택)
-            requirement_type: "전공필수", "전공선택", "공통교양" 등 (선택)
-        
-        Returns:
-            과목 목록
         """
         try:
             query = supabase.table('curriculums')\
@@ -110,13 +89,6 @@ class CurriculumService:
     ) -> List[str]:
         """
         선택 가능한 과목 코드 목록 (동적 조회)
-        
-        Args:
-            course_area: "전공" or "교양"
-            requirement_type: "전공선택", "심화교양", "추가선택" 등
-        
-        Returns:
-            과목 코드 리스트 ["CS0855", "CS0860", ...]
         """
         try:
             #추가선택인 경우 특별 처리
@@ -300,17 +272,18 @@ class CurriculumService:
                 if not matched:
                     unmatched_courses.append(course_info)
         
-        # 3.5. Overflow 처리 (초과 학점 → 심화교양)
-        if admission_year == 2024:
-            overflow_credits = self._handle_overflow_2024(
-                liberal_arts_requirements,
-                courses_taken
-            )
-            
-            # 심화교양에 overflow 추가
-            if '심화교양' in liberal_arts_requirements:
-                liberal_arts_requirements['심화교양']['taken'] += overflow_credits
-                liberal_arts_requirements['심화교양']['overflow'] = overflow_credits
+        # 3.5. Overflow 처리 (설정 기반 통합)
+        overflow_credits = self._handle_overflow(
+            admission_year,
+            liberal_arts_requirements,
+            courses_taken
+        )
+        
+        # 심화교양/창의교양에 overflow 추가
+        overflow_key = get_overflow_target_key(admission_year)
+        if overflow_key in liberal_arts_requirements:
+            liberal_arts_requirements[overflow_key]['taken'] += overflow_credits
+            liberal_arts_requirements[overflow_key]['overflow'] = overflow_credits
         
         # 4. 남은 학점 계산
         for req_dict in [major_requirements, liberal_arts_requirements]:
@@ -353,9 +326,9 @@ class CurriculumService:
             },
             
             "general_elective": {
-                "available": general_elective_available,  # "필요" → "가능"
+                "available": general_elective_available, 
                 "taken": general_elective_taken,
-                "remaining": remaining_to_graduate  # 졸업까지 실제 남은 학점
+                "remaining": remaining_to_graduate  
             }
         }
         
@@ -368,75 +341,138 @@ class CurriculumService:
         return result
 
 
-    def _handle_overflow_2024(
+    # ===== Overflow 처리 (리팩토링 - 설정 기반) =====
+    
+    def _handle_overflow(
         self,
+        admission_year: int,
         liberal_arts_requirements: Dict,
         courses_taken: List
     ) -> int:
         """
-        2024학번 overflow 처리
+        학번별 overflow 처리 (통합)
+        설정 기반으로 동작하여 학번 추가 시 코드 수정 불필요
         
         Returns:
-            심화교양으로 인정할 초과 학점
+            심화교양/창의교양으로 인정할 초과 학점
         """
-        overflow = 0
+        # 규칙 가져오기
+        rules = get_rules(admission_year)
+        overflow_rules = rules.get('overflow', {})
         
-        # 1. 기초 > 택1 초과 체크
-        overflow += self._check_기초_택1_overflow(courses_taken)
+        if not overflow_rules:
+            return 0  # overflow 규칙 없음
         
-        # 2. 핵심 초과 체크
-        overflow += self._check_핵심_overflow(liberal_arts_requirements)
+        total_overflow = 0
         
-        # 3. 글로벌의사소통 초과 체크
-        overflow += self._check_글로벌의사소통_overflow(courses_taken)
+        # 각 overflow 규칙 적용
+        for rule_name, rule_config in overflow_rules.items():
+            rule_type = rule_config.get('type')
+            
+            if rule_type == 'course_selection':
+                # 과목 선택 overflow (예: 사고와글쓰기/정량적사고 중 택1)
+                overflow = self._check_course_selection_overflow(
+                    rule_config,
+                    courses_taken
+                )
+                total_overflow += overflow
+                
+                if overflow > 0:
+                    print(f"  Overflow [{rule_name}]: +{overflow}학점")
+            
+            elif rule_type == 'track_based':
+                # 트랙 기반 overflow (예: 핵심 8학점 초과)
+                overflow = self._check_track_overflow(
+                    rule_config,
+                    liberal_arts_requirements
+                )
+                total_overflow += overflow
+                
+                if overflow > 0:
+                    print(f"  Overflow [{rule_name}]: +{overflow}학점")
         
-        return overflow
+        if total_overflow > 0:
+            print(f"  총 Overflow: {total_overflow}학점 → {get_overflow_target_key(admission_year)}")
+        
+        return total_overflow
 
 
-    def _check_기초_택1_overflow(self, courses_taken: List) -> int:
+    def _check_course_selection_overflow(
+        self,
+        rule: Dict,
+        courses_taken: List
+    ) -> int:
         """
-        기초 > 사고와글쓰기(XG0701) OR 정량적사고와컴퓨팅사고(XG0702)
-        둘 다 들었으면 초과 2학점 → 심화교양
-        """
-        has_사고와글쓰기 = any(c.course_code == 'XG0701' for c in courses_taken)
-        has_정량적사고 = any(c.course_code == 'XG0702' for c in courses_taken)
+        과목 선택 overflow 체크 (범용)
         
-        if has_사고와글쓰기 and has_정량적사고:
-            return 2  # 초과분
-        return 0
-
-
-    def _check_핵심_overflow(self, liberal_arts_requirements: Dict) -> int:
-        """
-        핵심 > 8학점 초과하면 최대 6학점까지 심화교양
-        """
-        핵심_taken = 0
+        예시:
+        - 사고와글쓰기/정량적사고 중 1개만 필수인데 2개 들음
+        - 글로벌 의사소통 1개만 필수인데 2개 들음
         
-        for track_name in ['핵심-인문학', '핵심-사회과학', '핵심-SW']:
-            if track_name in liberal_arts_requirements:
-                핵심_taken += liberal_arts_requirements[track_name]['taken']
+        Args:
+            rule: overflow 규칙
+                - codes: 해당 과목 코드 리스트
+                - max_allowed: 최대 허용 과목 수
+                - credit_per_course: 과목당 학점
+            courses_taken: 이수한 과목 리스트
         
-        if 핵심_taken > 8:
-            overflow = min(핵심_taken - 8, 6)  # 최대 6학점
-            return overflow
-        return 0
-
-
-    def _check_글로벌의사소통_overflow(self, courses_taken: List) -> int:
+        Returns:
+            overflow 학점
         """
-        글로벌의사소통 > 2과목 들었으면 초과 2학점 → 심화교양
-        (일반 학생 기준, 한국어(XG0720) 제외)
-        """
-        글로벌과목들 = ['XG0717', 'XG0718', 'XG0719']  # 영어, 중국어, 일본어
+        codes = rule.get('codes', [])
+        max_allowed = rule.get('max_allowed', 1)
+        credit_per_course = rule.get('credit_per_course', 2)
         
         taken_count = sum(
             1 for c in courses_taken 
-            if c.course_code in 글로벌과목들
+            if c.course_code in codes
         )
         
-        if taken_count > 1:
-            return 2  # 초과 1과목 = 2학점
+        if taken_count > max_allowed:
+            overflow_count = taken_count - max_allowed
+            return overflow_count * credit_per_course
+        
         return 0
+
+
+    def _check_track_overflow(
+        self,
+        rule: Dict,
+        liberal_arts_requirements: Dict
+    ) -> int:
+        """
+        트랙 기반 overflow 체크 (범용)
+        
+        예시:
+        - 핵심 8학점 필수인데 더 들으면 최대 6학점까지 overflow
+        
+        Args:
+            rule: overflow 규칙
+                - track_names: 해당 트랙 이름 리스트
+                - base_required: 기본 필수 학점
+                - max_overflow: 최대 overflow 학점
+            liberal_arts_requirements: 교양 요건 dict
+        
+        Returns:
+            overflow 학점
+        """
+        track_names = rule.get('track_names', [])
+        base_required = rule.get('base_required', 0)
+        max_overflow = rule.get('max_overflow', 0)
+        
+        total_taken = 0
+        for track_name in track_names:
+            if track_name in liberal_arts_requirements:
+                total_taken += liberal_arts_requirements[track_name]['taken']
+        
+        if total_taken > base_required:
+            overflow = min(total_taken - base_required, max_overflow)
+            return overflow
+        
+        return 0
+    
+    
+    # ===== 기타 메서드 (기존 유지) =====
     
     def get_courses_not_taken(
         self,
@@ -445,21 +481,6 @@ class CurriculumService:
     ) -> List[Dict[str, Any]]:
         """
         아직 안 들은 과목 목록
-        
-        Args:
-            requirement_type: "전공필수", "전공선택" 등
-        
-        Returns:
-            [
-                {
-                    "course_code": "CS0623",
-                    "course_name": "이산수학",
-                    "credit": 3,
-                    "grade": 1,
-                    "semester": 2
-                },
-                ...
-            ]
         """
         admission_year = user_profile.admission_year
         courses_taken = user_profile.courses_taken
@@ -512,9 +533,10 @@ class CurriculumService:
             return f"❌ {calculation['error']}\n\n💡 {calculation.get('message', '')}"
         
         lines = []
+        admission_year = calculation['admission_year']
         
         # 헤더
-        lines.append(f"📊 {calculation['admission_year']}학번 졸업 요건 현황\n")
+        lines.append(f"📊 {admission_year}학번 졸업 요건 현황\n")
         
         # 전체 학점
         lines.append(f"🎓 전체")
@@ -555,9 +577,13 @@ class CurriculumService:
             else:
                 credit_range = f"{info['required']}학점"
             
+            overflow_text = ""
+            if 'overflow' in info and info['overflow'] > 0:
+                overflow_text = f" (overflow: +{info['overflow']}학점)"
+            
             lines.append(
                 f"  {status} {track}: "
-                f"{info['taken']}/{credit_range}"
+                f"{info['taken']}/{credit_range}{overflow_text}"
             )
             
             if info['taken_courses'] and len(info['taken_courses']) <= 3:
@@ -580,12 +606,14 @@ class CurriculumService:
         lines.append("\n" + "=" * 50)
         lines.append("📌 참고사항")
         
-        # 외국인 학생 안내 (2024학번)
-        if calculation.get('admission_year') == 2024:
-            lines.append("\n외국인 학생:")
-            lines.append("- 순수 외국인 특별전형 입학생은 '커뮤니케이션 한국어' 필수")
-            lines.append("- 외국인 학생의 경우 영어/중국어/일본어 초과 1과목은 심화교양 인정")
-            lines.append("- 일반 학생은 한국어 수강 시 학점 미인정")
+        # 학번별 특이사항
+        rules = get_rules(admission_year)
+        notes = rules.get('notes', {})
+        
+        if notes:
+            lines.append("")
+            for note_key, note_text in notes.items():
+                lines.append(f"- {note_text}")
         
         # 경고
         if 'warnings' in calculation:
@@ -601,28 +629,6 @@ class CurriculumService:
     ) -> List[Dict]:
         """
         미이수 필수 과목 목록
-        
-        Args:
-            user_profile: 사용자 프로필
-            course_area: "전공" or "교양" (None이면 전체)
-            requirement_type: "전공필수", "공통교양" 등 (None이면 전체)
-        
-        Returns:
-            [
-                {
-                    "course_code": "CS0623",
-                    "course_name": "이산수학",
-                    "credit": 3,
-                    "course_area": "전공",
-                    "requirement_type": "전공필수",
-                    "grade": 1,
-                    "semester": 2,
-                    "alternative_codes": [
-                        {"code": "CS0851", "name": "컴퓨터수학", "type": "동일"}
-                    ]
-                },
-                ...
-            ]
         """
         admission_year = user_profile.admission_year
         courses_taken = user_profile.courses_taken
@@ -704,10 +710,6 @@ class CurriculumService:
     ) -> List[Dict]:
         """
         동일대체 교과목 목록 조회 (입학년도 이후만)
-        
-        Args:
-            course_code: 신 과목 코드
-            admission_year: 입학년도 (이후 변경사항만 표시)
         """
         try:
             query = supabase.table('equivalent_courses')\

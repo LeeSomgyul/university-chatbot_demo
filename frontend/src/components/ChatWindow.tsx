@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import MessageBubble from './MessageBubble';
 import { chatAPI } from '../services/api';
-import type { Message, UserProfile } from '../types/chat';
+import type { Message } from '../types/chat';
 import './ChatWindow.css';
 
 const ChatWindow: React.FC = () => {
@@ -11,25 +11,6 @@ const ChatWindow: React.FC = () => {
   const [sessionId, setSessionId] = useState<string | undefined>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 테스트용 사용자 프로필 (나중에 폼으로 입력받을 수 있음)
-  const [userProfile] = useState<UserProfile>({
-    admission_year: 2020,
-    track: '일반',
-    courses_taken: [
-      {
-        course_name: '프로그래밍기초',
-        course_code: 'CSE101',
-        credit: 3,
-        course_area: '전공필수',
-      },
-      {
-        course_name: '자료구조',
-        course_code: 'CSE201',
-        credit: 3,
-        course_area: '전공필수',
-      },
-    ],
-  });
 
   // 자동 스크롤
   const scrollToBottom = () => {
@@ -70,7 +51,7 @@ const ChatWindow: React.FC = () => {
       const response = await chatAPI.sendMessage({
         message: inputValue,
         session_id: sessionId,
-        user_profile: userProfile,
+        user_profile: undefined,
         history: messages,
       });
 

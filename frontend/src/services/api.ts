@@ -13,7 +13,16 @@ const api = axios.create({
 export const chatAPI = {
   // 채팅 메시지 전송
   sendMessage: async (request: ChatRequest): Promise<ChatResponse> => {
-    const response = await api.post<ChatResponse>('/chat', request);
+    const cleanRequest = {
+      message: request.message,
+      session_id: null,  // ⭐ 항상 null
+      user_profile: null,  // ⭐ 항상 null
+      history: request.history || []
+    };
+
+    console.log('📤 전송 데이터:', cleanRequest);
+
+    const response = await api.post<ChatResponse>('/chat', cleanRequest);
     return response.data;
   },
 

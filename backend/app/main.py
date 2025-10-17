@@ -75,20 +75,45 @@ async def health_check():
 async def chat(request: ChatRequest):
     """챗봇 대화 엔드포인트"""
     try:
+        print(f"\n{'='*50}")
+        print(f"📬 새 요청 도착!")
+        print(f"{'='*50}")
+        
         # 세션 관리 (기존 코드)
         session_id = request.session_id
+        
         if not session_id:
-            session_id = session_store.create_session(request.user_profile)
+            session_id = session_store.create_session(None)
+            print(f"  ✅ 새 세션 생성: {session_id}")
         else:
             session = session_store.get_session(session_id)
             if not session:
-                session_id = session_store.create_session(request.user_profile)
+                session_id = session_store.create_session(None)
+                print(f"  ✅ 세션 만료, 새로 생성: {session_id}")
             elif request.user_profile:
                 session_store.update_profile(session_id, request.user_profile)
         
         # 세션에서 사용자 프로필 가져오기
         session = session_store.get_session(session_id)
-        user_profile = session['user_profile'] if session else request.user_profile
+        session_profile = session.get('user_profile') if session else None
+        
+        if session_profile:
+            is_dummy = (
+                session_profile.admission_year == 2020 and
+                any(c.course_code.startswith('CSE') for c in session_profile.courses_taken)
+            )
+            
+            if is_dummy:
+                print(f"⚠️ 더미 프로필 감지, 무시: {session_profile.admission_year}학번")
+                session_profile = None
+                
+        user_profile = request.user_profile if request.user_profile else session_profile
+        
+        print(f"\n📨 요청 정보:")
+        print(f"  session_id: {session_id}")
+        print(f"  request.user_profile: {request.user_profile}")
+        print(f"  session_profile: {session_profile}")
+        print(f"  final user_profile: {user_profile}")
         
         # 챗봇 호출
         result = chatbot.chat(
@@ -96,13 +121,12 @@ async def chat(request: ChatRequest):
             user_profile=user_profile,
             history=request.history
         )
-        
-        # ⭐ 챗봇이 UserProfile을 생성했다면 세션에 저장
-        # (result에 'user_profile'이 포함되어 있으면)
-        if 'user_profile' in result and result['user_profile']:
+
+        if isinstance(result, dict) and 'user_profile' in result and result['user_profile']:
             session_store.update_profile(session_id, result['user_profile'])
+            print(f"  ✅ 세션에 프로필 저장: {result['user_profile'].admission_year}학번")
         
-        # 세션에 메시지 저장 (기존 코드)
+        # 세션에 메시지 저장
         session_store.add_message(session_id, {
             "role": "user",
             "content": request.message,
