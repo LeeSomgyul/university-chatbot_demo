@@ -271,6 +271,10 @@ class CurriculumService:
                 
                 if not matched:
                     unmatched_courses.append(course_info)
+            else:
+                # 일반선택으로 분류
+                unmatched_courses.append(course_info)
+                print(f"  📝 일반선택: {course_name} ({course_area})")
         
         # 3.5. Overflow 처리 (설정 기반 통합)
         overflow_credits = self._handle_overflow(
@@ -328,15 +332,10 @@ class CurriculumService:
             "general_elective": {
                 "available": general_elective_available, 
                 "taken": general_elective_taken,
-                "remaining": remaining_to_graduate  
+                "remaining": remaining_to_graduate,
+                "courses": unmatched_courses
             }
         }
-        
-        if unmatched_courses:
-            result["warnings"] = {
-                "unmatched_courses": unmatched_courses,
-                "message": f"일부 과목({len(unmatched_courses)}개)이 졸업 요건에 매칭되지 않았습니다."
-            }
         
         return result
 
@@ -540,15 +539,16 @@ class CurriculumService:
         
         # 전체 학점
         lines.append(f"🎓 전체")
-        lines.append(f"  총 졸업 학점: {calculation['total_required']}학점")
-        lines.append(f"  이수 완료: {calculation['total_taken']}학점")
-        lines.append(f"  남은 학점: {calculation['remaining']}학점")
-        lines.append(f"  진행률: {calculation['progress_percent']}%\n")
+        lines.append(f"  [총 졸업 학점] {calculation['total_required']}학점")
+        lines.append(f"  [이수 완료] {calculation['total_taken']}학점")
+        lines.append(f"  [남은 학점] {calculation['remaining']}학점")
+        lines.append(f"  [진행률] {calculation['progress_percent']}%\n")
         
         # 전공
         major = calculation['major']
         lines.append(f"📚 전공 (필요: {major['total_required']}학점)")
-        lines.append(f"  이수: {major['total_taken']}학점 / 남음: {major['remaining']}학점")
+        lines.append(f"  ✔️ 이수: {major['total_taken']}학점")
+        lines.append(f"  ✔️ 남음: {major['remaining']}학점")
         
         for req_type, info in major['details'].items():
             status = "✅" if info['remaining'] == 0 else "⏳"
@@ -565,8 +565,9 @@ class CurriculumService:
         
         # 교양
         liberal = calculation['liberal_arts']
-        lines.append(f"📖 교양 (필요: {liberal['total_required']}학점)")
-        lines.append(f"  이수: {liberal['total_taken']}학점 / 남음: {liberal['remaining']}학점")
+        lines.append(f"📖 교양 (최소 필요: {liberal['total_required']}학점)")
+        lines.append(f"  ✔️ 이수: {liberal['total_taken']}학점")
+        lines.append(f"  ✔️ 남음: {liberal['remaining']}학점")
         
         for track, info in liberal['details'].items():
             status = "✅" if info['remaining'] == 0 else "⏳"
@@ -594,30 +595,23 @@ class CurriculumService:
         
         # 일반선택
         general = calculation['general_elective']
-        lines.append("\n📝 일반선택 (선택사항)")
+        lines.append("📝 일반선택 (선택사항)")
         lines.append(f"  이수: {general['taken']}학점")
-        lines.append(f"  선택 가능: 최대 {general['available']}학점")
 
-        if general['remaining'] > 0:
-            lines.append(f"  💡 졸업까지 {general['remaining']}학점 더 필요 (교양/전공/일반선택 자유)")
-        else:
-            lines.append(f"  ✅ 졸업 학점 충족!")
+        # 일반선택 과목 표시
+        if general.get('courses'):
+            for c in general['courses']:
+                lines.append(f"     - {c['name']} ({c['credit']}학점)")
+    
+        lines.append(f"  선택 가능: 최대 {general['available']}학점")
             
-        lines.append("\n" + "=" * 50)
-        lines.append("📌 참고사항")
-        
-        # 학번별 특이사항
-        rules = get_rules(admission_year)
-        notes = rules.get('notes', {})
-        
-        if notes:
-            lines.append("")
-            for note_key, note_text in notes.items():
-                lines.append(f"- {note_text}")
+        lines.append("\n" + "=" * 30)
         
         # 경고
-        if 'warnings' in calculation:
-            lines.append(f"\n⚠️ {calculation['warnings']['message']}")
+        lines.append("\n⚠️ 중요 안내")
+        lines.append("이 정보는 참고용이며 정확하지 않을 수 있습니다.")
+        lines.append("정확한 졸업 요건은 반드시 교육과정 또는 학과 사무실에서 확인하시기 바랍니다.")
+        lines.append("문의: 컴퓨터공학과 사무실")
         
         return "\n".join(lines)
     
