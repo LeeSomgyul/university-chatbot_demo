@@ -11,16 +11,13 @@ from app.rules.graduation_rules import get_rules, get_overflow_target_key
 class CurriculumService:
     """교육과정 계산 서비스"""
     
-    # 총 졸업 학점 (기본값)
-    TOTAL_GRADUATION_CREDITS = 140
-    
+    # ===== 졸업요건 조회 =====
+    # 1. 졸업요건 전체 조회
     def get_graduation_requirements(
         self, 
         admission_year: int
     ) -> List[Dict[str, Any]]:
-        """
-        졸업요건 전체 조회
-        """
+        """졸업요건 전체 조회"""
         try:
             result = supabase.table('graduation_requirements')\
                 .select('*')\
@@ -29,12 +26,15 @@ class CurriculumService:
             
             if not result.data:
                 print(f"⚠️ {admission_year}학번 졸업요건을 찾을 수 없습니다.")
+                return []
             
-            return result.data if result.data else []
+            return result.data
+            
         except Exception as e:
             print(f"❌ 졸업요건 조회 실패: {e}")
             return []
     
+    #2. 총 졸업 학점
     def get_total_graduation_credits(self, admission_year: int) -> int:
         """총 졸업 학점 조회"""
         try:
@@ -48,110 +48,29 @@ class CurriculumService:
             
             if result.data:
                 return result.data['required_credits']
-        except:
-            pass
-        
-        # 설정에서 가져오기
-        rules = get_rules(admission_year)
-        return rules.get('total_credits', self.TOTAL_GRADUATION_CREDITS)
-    
-    def get_curriculum(
-        self,
-        admission_year: int,
-        course_area: Optional[str] = None,
-        requirement_type: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        교육과정 조회
-        """
-        try:
-            query = supabase.table('curriculums')\
-                .select('*')\
-                .eq('admission_year', admission_year)
             
-            if course_area:
-                query = query.eq('course_area', course_area)
+            # DB에 없으면 기본값
+            print(f"⚠️ {admission_year}학번 총 졸업학점 정보 없음, 기본값 140 사용")
+            return 140
             
-            if requirement_type:
-                query = query.eq('requirement_type', requirement_type)
-            
-            result = query.execute()
-            return result.data if result.data else []
         except Exception as e:
-            print(f"❌ 교육과정 조회 실패: {e}")
-            return []
-    
-    def get_selectable_courses(
-        self,
-        admission_year: int,
-        course_area: str,
-        requirement_type: str
-    ) -> List[str]:
-        """
-        선택 가능한 과목 코드 목록 (동적 조회)
-        """
-        try:
-            #추가선택인 경우 특별 처리
-            if requirement_type == '추가선택':
-                codes = []
-                
-                # 브릿지 과목 (기초교양/브릿지)
-                bridge_result = supabase.table('curriculums')\
-                    .select('course_code')\
-                    .eq('admission_year', admission_year)\
-                    .eq('course_area', '교양')\
-                    .eq('requirement_type', '기초교양')\
-                    .eq('track', '브릿지')\
-                    .execute()
-                
-                if bridge_result.data:
-                    codes.extend([row['course_code'] for row in bridge_result.data if row['course_code']])
-                
-                # 자유선택 과목 (창의교양/자유선택*)
-                free_result = supabase.table('curriculums')\
-                    .select('course_code')\
-                    .eq('admission_year', admission_year)\
-                    .eq('course_area', '교양')\
-                    .eq('requirement_type', '창의교양')\
-                    .like('track', '자유선택%')\
-                    .execute()
-                
-                if free_result.data:
-                    codes.extend([row['course_code'] for row in free_result.data if row['course_code']])
-                
-                # 중복 제거
-                return list(set(codes))
-            
-            #기존 로직 (일반 경우)
-            result = supabase.table('curriculums')\
-                .select('course_code')\
-                .eq('admission_year', admission_year)\
-                .eq('course_area', course_area)\
-                .eq('requirement_type', requirement_type)\
-                .execute()
-            
-            if result.data:
-                # 중복 제거
-                codes = list(set([row['course_code'] for row in result.data if row['course_code']]))
-                return codes
-            return []
-        except Exception as e:
-            print(f"❌ 선택 가능 과목 조회 실패: {e}")
-            return []
-    
+            print(f"❌ 총 졸업학점 조회 실패: {e}")
+            return 140
+          
+    # ===== 핵심 계산 =====
+    #1. 졸업사정 계산
     def calculate_remaining_credits(
         self, 
         user_profile: UserProfile
     ) -> Dict[str, Any]:
         """
-        남은 학점 계산 (overflow 처리 포함)
+        남은 학점 계산 (개인 졸업사정)
         """
         admission_year = user_profile.admission_year
         courses_taken = user_profile.courses_taken
         
-        # 1. 졸업요건 조회
+        # ===== 1. 졸업요건 조회 =====
         requirements = self.get_graduation_requirements(admission_year)
-        requirements = [r for r in requirements if r.get('course_area') != '전체']
         
         if not requirements:
             return {
@@ -159,17 +78,19 @@ class CurriculumService:
                 "message": "학번을 확인해주세요."
             }
         
+        # 총 졸업 학점
         total_graduation_credits = self.get_total_graduation_credits(admission_year)
         
-        # 2. 요건 구조화
-        major_requirements = {}
-        liberal_arts_requirements = {}
+        # ===== 2. 요건 구조화 (전공/교양 분리) =====
+        major_requirements = {} #전공필수, 전공선택
+        liberal_arts_requirements = {} #교양(특랙별)
         
         for req in requirements:
             course_area = req['course_area']
             req_type = req['requirement_type']
             track = req.get('track')
             
+            # 요건 정보 구조화
             requirement_info = {
                 'required': req['required_credits'],
                 'min_credits': req.get('min_credits', req['required_credits']),
@@ -182,7 +103,7 @@ class CurriculumService:
                 'taken_courses': [],
             }
             
-            # 동적 조회
+            # 선택 가능 과목 동적 조회 (DB에 없으면)
             if not requirement_info['selectable_codes'] and not requirement_info['required_all']:
                 if req_type in ['전공선택', '심화교양']:
                     dynamic_codes = self.get_selectable_courses(
@@ -192,17 +113,18 @@ class CurriculumService:
                     )
                     requirement_info['selectable_codes'] = dynamic_codes
             
+            # 전공/교양 분류
             if course_area == '전공':
                 major_requirements[req_type] = requirement_info
             elif course_area == '교양':
                 key = track if track else req_type
                 liberal_arts_requirements[key] = requirement_info
         
-        # 3. 이수 학점 계산
-        total_taken = 0
-        major_taken = 0
-        liberal_arts_taken = 0
-        unmatched_courses = []
+        # ===== 3. 이수 학점 계산 =====
+        total_taken = 0 #전체 이수 학점
+        major_taken = 0 #전공 이수 학점
+        liberal_arts_taken = 0 #교양 이수 학점
+        unmatched_courses = [] #매칭 안된 과목(일반선택)
         
         for course in courses_taken:
             course_code = course.course_code
@@ -220,7 +142,7 @@ class CurriculumService:
                 'grade': course.grade
             }
             
-            # 전공 과목
+            # ===== 3-1. 전공 과목 처리 =====
             if course_area == '전공':
                 major_taken += credit
                 
@@ -228,6 +150,7 @@ class CurriculumService:
                     req_info = major_requirements[req_type]
                     is_matched = False
                     
+                    # 필수 과목 매칭
                     for required_code in req_info['required_all']:
                         if equivalent_course_service.is_equivalent(course_code, required_code):
                             req_info['taken'] += credit
@@ -235,6 +158,7 @@ class CurriculumService:
                             is_matched = True
                             break
                     
+                    # 선택 과목 매칭
                     if not is_matched:
                         for selectable_code in req_info['selectable_codes']:
                             if equivalent_course_service.is_equivalent(course_code, selectable_code):
@@ -243,12 +167,13 @@ class CurriculumService:
                                 is_matched = True
                                 break
                     
+                    # 매칭 실패 → 일반선택
                     if not is_matched:
                         unmatched_courses.append(course_info)
                 else:
                     unmatched_courses.append(course_info)
             
-            # 교양 과목
+            # ===== 3-2. 교양 과목 처리 =====
             elif course_area == '교양':
                 liberal_arts_taken += credit
                 matched = False
@@ -268,15 +193,17 @@ class CurriculumService:
                     
                     if matched:
                         break
-                
+                    
+                # 매칭 실패 → 일반선택
                 if not matched:
                     unmatched_courses.append(course_info)
+            # ===== 3-3. 전공도 교양도 아닌 과목 → 일반선택 =====
             else:
-                # 일반선택으로 분류
                 unmatched_courses.append(course_info)
                 print(f"  📝 일반선택: {course_name} ({course_area})")
         
-        # 3.5. Overflow 처리 (설정 기반 통합)
+        # ===== 4. Overflow 처리 =====
+        # (예: 기초교양 초과 → 심화교양 인정)
         overflow_credits = self._handle_overflow(
             admission_year,
             liberal_arts_requirements,
@@ -289,25 +216,29 @@ class CurriculumService:
             liberal_arts_requirements[overflow_key]['taken'] += overflow_credits
             liberal_arts_requirements[overflow_key]['overflow'] = overflow_credits
         
-        # 4. 남은 학점 계산
+        # ===== 5. 남은 학점 계산 =====
         for req_dict in [major_requirements, liberal_arts_requirements]:
             for key, info in req_dict.items():
                 info['remaining'] = max(0, info['required'] - info['taken'])
         
-        # 5. 교양/전공 필요 학점
+        # ===== 6. 전공/교양 총 필요 학점 =====
         major_required = sum(info['required'] for info in major_requirements.values())
         liberal_arts_required = sum(info['required'] for info in liberal_arts_requirements.values())
         
-        # 6. 일반선택 계산
+        # ===== 7. 일반선택 계산 =====
+        # 일반선택으로 이수한 학점
         general_elective_taken = total_taken - major_taken - liberal_arts_taken
+        
+        # 졸업까지 남은 총 학점
         remaining_to_graduate = max(0, total_graduation_credits - total_taken)
 
-        # 일반선택으로 채울 수 있는 여유 공간
+        # 일반선택으로 채울 수 있는 최대 학점
         general_elective_available = max(
             0,
             total_graduation_credits - major_required - liberal_arts_required
         )
         
+        # ===== 8. 결과 반환 =====
         result = {
             "admission_year": admission_year,
             "total_required": total_graduation_credits,
@@ -339,9 +270,69 @@ class CurriculumService:
         
         return result
 
-
-    # ===== Overflow 처리 (리팩토링 - 설정 기반) =====
-    
+    #2. 선택 가능 과목 동적 조회
+    def get_selectable_courses(
+            self,
+            admission_year: int,
+            course_area: str,
+            requirement_type: str
+        ) -> List[str]:
+            """
+            선택 가능한 과목 코드 목록 (동적 조회)
+            """
+            try:
+                # ===== 특수 케이스: 추가선택 =====
+                if requirement_type == '추가선택':
+                    codes = []
+                    
+                    # 1. 브릿지 과목 (기초교양/브릿지)
+                    bridge_result = supabase.table('curriculums')\
+                        .select('course_code')\
+                        .eq('admission_year', admission_year)\
+                        .eq('course_area', '교양')\
+                        .eq('requirement_type', '기초교양')\
+                        .eq('track', '브릿지')\
+                        .execute()
+                    
+                    if bridge_result.data:
+                        codes.extend([row['course_code'] for row in bridge_result.data if row['course_code']])
+                    
+                    # 2. 자유선택 과목 (창의교양/자유선택*)
+                    free_result = supabase.table('curriculums')\
+                        .select('course_code')\
+                        .eq('admission_year', admission_year)\
+                        .eq('course_area', '교양')\
+                        .eq('requirement_type', '창의교양')\
+                        .like('track', '자유선택%')\
+                        .execute()
+                    
+                    if free_result.data:
+                        codes.extend([row['course_code'] for row in free_result.data if row['course_code']])
+                    
+                    # 중복 제거
+                    return list(set(codes))
+                
+                # ===== 일반 케이스: 전공선택, 심화교양 등 =====
+                result = supabase.table('curriculums')\
+                    .select('course_code')\
+                    .eq('admission_year', admission_year)\
+                    .eq('course_area', course_area)\
+                    .eq('requirement_type', requirement_type)\
+                    .execute()
+                
+                if result.data:
+                    # 중복 제거
+                    codes = list(set([row['course_code'] for row in result.data if row['course_code']]))
+                    return codes
+                return []
+            except Exception as e:
+                print(f"❌ 선택 가능 과목 조회 실패 ({requirement_type}): {e}")
+                import traceback
+                traceback.print_exc()
+                return []
+            
+    # ===== OverFlow처리 ===== 
+    #1. 메인 로직
     def _handle_overflow(
         self,
         admission_year: int,
@@ -349,27 +340,25 @@ class CurriculumService:
         courses_taken: List
     ) -> int:
         """
-        학번별 overflow 처리 (통합)
-        설정 기반으로 동작하여 학번 추가 시 코드 수정 불필요
-        
-        Returns:
-            심화교양/창의교양으로 인정할 초과 학점
+        교양 과목에서 초과 이수한 학점을 다른 트랙으로 이동
         """
-        # 규칙 가져오기
+        # ===== 1. Overflow 규칙 가져오기 =====
         rules = get_rules(admission_year)
         overflow_rules = rules.get('overflow', {})
         
         if not overflow_rules:
-            return 0  # overflow 규칙 없음
+            return 0 
         
         total_overflow = 0
         
-        # 각 overflow 규칙 적용
+        # ===== 2. 각 Overflow 규칙 적용 =====
         for rule_name, rule_config in overflow_rules.items():
             rule_type = rule_config.get('type')
+            overflow = 0
             
+            # 타입 1: 과목 선택 overflow
             if rule_type == 'course_selection':
-                # 과목 선택 overflow (예: 사고와글쓰기/정량적사고 중 택1)
+                # 예: 택1 과목에서 2개 이상 이수 시 초과분 인정
                 overflow = self._check_course_selection_overflow(
                     rule_config,
                     courses_taken
@@ -378,153 +367,228 @@ class CurriculumService:
                 
                 if overflow > 0:
                     print(f"  Overflow [{rule_name}]: +{overflow}학점")
-            
+            # 타입 2: 트랙 기반 overflow
             elif rule_type == 'track_based':
-                # 트랙 기반 overflow (예: 핵심 8학점 초과)
+                # 예: 핵심교양 8학점 초과 시 초과분 인정
                 overflow = self._check_track_overflow(
                     rule_config,
                     liberal_arts_requirements
                 )
+            
+            # Overflow 학점 합산
+            if overflow > 0:
+                print(f"  ✅ Overflow [{rule_name}]: +{overflow}학점")
                 total_overflow += overflow
-                
-                if overflow > 0:
-                    print(f"  Overflow [{rule_name}]: +{overflow}학점")
         
+        # ===== 3. 결과 출력 =====
         if total_overflow > 0:
-            print(f"  총 Overflow: {total_overflow}학점 → {get_overflow_target_key(admission_year)}")
-        
+            target_key = get_overflow_target_key(admission_year)
+            print(f"  📊 총 Overflow: {total_overflow}학점 → {target_key} 인정")
+            
         return total_overflow
 
-
+    #2. 과목 선택
     def _check_course_selection_overflow(
         self,
         rule: Dict,
         courses_taken: List
     ) -> int:
         """
-        과목 선택 overflow 체크 (범용)
+        택1 과목에서 2개 이상 이수 시 초과분을 다른 트랙에 인정
         
         예시:
-        - 사고와글쓰기/정량적사고 중 1개만 필수인데 2개 들음
-        - 글로벌 의사소통 1개만 필수인데 2개 들음
-        
-        Args:
-            rule: overflow 규칙
-                - codes: 해당 과목 코드 리스트
-                - max_allowed: 최대 허용 과목 수
-                - credit_per_course: 과목당 학점
-            courses_taken: 이수한 과목 리스트
-        
-        Returns:
-            overflow 학점
+        - 글로벌의사소통: 4개 중 1개 필수 → 2개 들음 → 1개 초과 (2학점)
+        - 정량적추론: 3개 중 1개 필수 → 2개 들음 → 1개 초과 (2학점)
         """
         codes = rule.get('codes', [])
         max_allowed = rule.get('max_allowed', 1)
         credit_per_course = rule.get('credit_per_course', 2)
         
+        # 해당 과목들을 몇 개 들었는지 카운트
         taken_count = sum(
             1 for c in courses_taken 
             if c.course_code in codes
         )
         
+        # 초과 이수 시 overflow 계산
         if taken_count > max_allowed:
             overflow_count = taken_count - max_allowed
             return overflow_count * credit_per_course
         
         return 0
 
-
+    #3. 트랙
     def _check_track_overflow(
         self,
         rule: Dict,
         liberal_arts_requirements: Dict
     ) -> int:
         """
-        트랙 기반 overflow 체크 (범용)
-        
+        특정 트랙의 필수 학점을 초과 이수한 경우, 최대 범위 내에서 다른 트랙에 인정
+    
         예시:
-        - 핵심 8학점 필수인데 더 들으면 최대 6학점까지 overflow
-        
-        Args:
-            rule: overflow 규칙
-                - track_names: 해당 트랙 이름 리스트
-                - base_required: 기본 필수 학점
-                - max_overflow: 최대 overflow 학점
-            liberal_arts_requirements: 교양 요건 dict
-        
-        Returns:
-            overflow 학점
+        - 핵심교양: 8학점 필수, 14학점 이수 → 6학점 초과 (최대 6학점까지 인정)
         """
         track_names = rule.get('track_names', [])
         base_required = rule.get('base_required', 0)
         max_overflow = rule.get('max_overflow', 0)
         
+        # 해당 트랙들의 총 이수 학점 합산
         total_taken = 0
         for track_name in track_names:
             if track_name in liberal_arts_requirements:
-                total_taken += liberal_arts_requirements[track_name]['taken']
+                taken = liberal_arts_requirements[track_name]['taken']
+                total_taken += taken
         
+        # 초과 학점 계산 (최대치 제한)
         if total_taken > base_required:
-            overflow = min(total_taken - base_required, max_overflow)
+            raw_overflow = total_taken - base_required
+            overflow = min(raw_overflow, max_overflow)
+            
+            print(f"    트랙 overflow: {total_taken}학점 이수 (필수 {base_required}학점) → {overflow}학점 초과 (최대 {max_overflow}학점)")
             return overflow
         
         return 0
-    
-    
-    # ===== 기타 메서드 (기존 유지) =====
-    
-    def get_courses_not_taken(
-        self,
-        user_profile: UserProfile,
-        requirement_type: str = "전공필수"
-    ) -> List[Dict[str, Any]]:
+        
+    # ===== 과목 정보 조회 ===== 
+    #1. 과목 상세 정보
+    def _get_course_info(
+        self, 
+        admission_year: int, 
+        course_code: str
+    ) -> Dict:
         """
-        아직 안 들은 과목 목록
+        특정 과목의 상세 정보 조회 (학점, 학년, 학기 등)
+        """
+        try:
+            result = supabase.table('curriculums')\
+                .select('*')\
+                .eq('admission_year', admission_year)\
+                .eq('course_code', course_code)\
+                .limit(1)\
+                .execute()
+            
+            if result.data:
+                return result.data[0]
+            return None
+        except Exception as e:
+            print(f"❌ 과목 정보 조회 실패 ({course_code}): {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    #2. 동일대체 코드 조회
+    def _get_alternative_codes(
+        self, 
+        course_code: str,
+        admission_year: int = None 
+    ) -> List[Dict]:
+        """
+        동일대체 교과목 목록 조회 (입학년도 이후만)
+        """
+        try:
+            # DB 조회
+            query = supabase.table('equivalent_courses')\
+                .select('new_course_code, new_course_name, mapping_type, effective_year')\
+                .eq('old_course_code', course_code)
+            
+            # 입학년도 이후만 필터링
+            if admission_year:
+                query = query.gt('effective_year', admission_year)
+            
+            result = query.execute()
+            
+            if not result.data:
+                return []
+            
+            # 중복 제거
+            seen = set()
+            alternatives = []
+                
+            for row in result.data:
+                new_code = row['new_course_code']
+                
+                if new_code not in seen:
+                    seen.add(new_code)
+                    alternatives.append({
+                        'code': new_code,
+                        'name': row['new_course_name'],
+                        'type': row['mapping_type'],
+                        'year': row.get('effective_year')
+                    })
+                
+                return alternatives
+            
+        except Exception as e:
+            print(f"❌ 동일대체 교과목 조회 실패 ({course_code}): {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+        
+    #3. 미이수 필수 과목    
+    def get_required_courses_not_taken(
+        self, 
+        user_profile: UserProfile,
+        course_area: str = None,
+        requirement_type: str = None
+    ) -> List[Dict]:
+        """
+        미이수 필수 과목 목록
         """
         admission_year = user_profile.admission_year
         courses_taken = user_profile.courses_taken
         
-        # 해당 영역의 모든 과목 조회
-        all_courses = self.get_curriculum(
-            admission_year=admission_year,
-            requirement_type=requirement_type
-        )
+        # ===== 1. 이수한 과목 코드 수집 (동일대체 포함) =====
+        taken_codes = set()
         
-        # 이미 들은 과목 코드/이름 세트
-        taken_codes = {
-            course.course_code 
-            for course in courses_taken 
-            if course.course_code
-        }
-        taken_names = {course.course_name for course in courses_taken}
-        
-        # 안 들은 과목 필터링
-        not_taken = []
-        seen_codes = set()  # 중복 제거
-        
-        for course in all_courses:
-            code = course['course_code']
-            name = course['course_name']
+        for course in courses_taken:
+            taken_codes.add(course.course_code)
             
-            # 이미 들었거나 이미 추가한 과목은 제외
-            if code in taken_codes or name in taken_names or code in seen_codes:
+            # 동일대체 교과목 확인 (구 코드 → 신 코드)
+            equiv = equivalent_course_service.get_equivalent_course(course.course_code)
+            if equiv:
+                # 구 과목 들었으면 신 과목도 이수로 간주
+                taken_codes.add(equiv['new_course_code'])
+                print(f"  🔄 동일대체: {course.course_code} → {equiv['new_course_code']}")
+        
+        # ===== 2. 필수 과목 조회 =====
+        requirements = self.get_graduation_requirements(admission_year)
+        
+        not_taken = []
+        
+        for req in requirements:
+            # 필터링
+            if course_area and req.get('course_area') != course_area:
+                continue
+            if requirement_type and req.get('requirement_type') != requirement_type:
                 continue
             
-            seen_codes.add(code)
-            not_taken.append({
-                'course_code': code,
-                'course_name': name,
-                'credit': course['credit'],
-                'grade': course['grade'],
-                'semester': course['semester'],
-                'is_required': course.get('is_required_to_graduate', False)
-            })
+            required_all = req.get('required_all', [])
+            
+            # 필수 과목 순회
+            for course_code in required_all:
+                # 이미 이수했으면 제외
+                if course_code in taken_codes:
+                    continue
+                
+                # 과목 정보 조회
+                course_info = self._get_course_info(admission_year, course_code)
+                
+                if course_info:
+                    # 동일대체 교과목 정보 추가
+                    course_info['alternative_codes'] = self._get_alternative_codes(
+                        course_code,
+                        admission_year  # 입학년도 이후 변경사항만
+                    )
+                    not_taken.append(course_info)
         
-        # 학년-학기 순으로 정렬
-        not_taken.sort(key=lambda x: (x['grade'], x['semester']))
+        # 3. 학기 순으로 정렬
+        not_taken.sort(key=lambda x: (x.get('grade', 99), x.get('semester', 99)))
         
         return not_taken
-    
+        
+    # ===== 포맷팅 =====    
+    #1. 졸업사정 포맷팅(폼)    
     def format_curriculum_info(self, calculation: Dict[str, Any]) -> str:
         """계산 결과를 사용자 친화적으로 포맷팅"""
         
@@ -597,14 +661,13 @@ class CurriculumService:
         general = calculation['general_elective']
         lines.append("📝 일반선택 (선택사항)")
         lines.append(f"  이수: {general['taken']}학점")
+        lines.append(f"  선택 가능: 최대 {general['available']}학점")
 
         # 일반선택 과목 표시
         if general.get('courses'):
             for c in general['courses']:
                 lines.append(f"     - {c['name']} ({c['credit']}학점)")
     
-        lines.append(f"  선택 가능: 최대 {general['available']}학점")
-            
         lines.append("\n" + "=" * 30)
         
         # 경고
@@ -613,131 +676,9 @@ class CurriculumService:
         lines.append("정확한 졸업 요건은 반드시 교육과정 또는 학과 사무실에서 확인하시기 바랍니다.")
         lines.append("문의: 컴퓨터공학과 사무실")
         
-        return "\n".join(lines)
+        return "\n".join(lines)  
     
-    def get_required_courses_not_taken(
-        self, 
-        user_profile: UserProfile,
-        course_area: str = None,
-        requirement_type: str = None
-    ) -> List[Dict]:
-        """
-        미이수 필수 과목 목록
-        """
-        admission_year = user_profile.admission_year
-        courses_taken = user_profile.courses_taken
-        
-        # 1. 이수한 과목 코드 수집 (동일대체 포함)
-        taken_codes = set()
-        for course in courses_taken:
-            taken_codes.add(course.course_code)
-            
-            # 동일대체 교과목 확인 (구 코드 → 신 코드)
-            equiv = equivalent_course_service.get_equivalent_course(course.course_code)
-            if equiv:
-                taken_codes.add(equiv['new_course_code'])
-        
-        # 2. 필수 과목 조회
-        requirements = self.get_graduation_requirements(admission_year)
-        
-        not_taken = []
-        
-        for req in requirements:
-            # 필터링
-            if course_area and req.get('course_area') != course_area:
-                continue
-            if requirement_type and req.get('requirement_type') != requirement_type:
-                continue
-            
-            required_all = req.get('required_all', [])
-            
-            for course_code in required_all:
-                # 이미 이수했으면 제외
-                if course_code in taken_codes:
-                    continue
-                
-                # 과목 정보 조회
-                course_info = self._get_course_info(admission_year, course_code)
-                
-                if course_info:
-                    # 동일대체 교과목 정보 추가
-                    course_info['alternative_codes'] = self._get_alternative_codes(
-                        course_code,
-                        admission_year  # 입학년도 이후 변경사항만
-                    )
-                    not_taken.append(course_info)
-        
-        # 3. 학기 순으로 정렬
-        not_taken.sort(key=lambda x: (x.get('grade', 99), x.get('semester', 99)))
-        
-        return not_taken
-
-
-    def _get_course_info(
-        self, 
-        admission_year: int, 
-        course_code: str
-    ) -> Dict:
-        """
-        특정 과목의 상세 정보 조회
-        """
-        try:
-            result = supabase.table('curriculums')\
-                .select('*')\
-                .eq('admission_year', admission_year)\
-                .eq('course_code', course_code)\
-                .limit(1)\
-                .execute()
-            
-            if result.data:
-                return result.data[0]
-            return None
-        except Exception as e:
-            print(f"❌ 과목 정보 조회 실패: {e}")
-            return None
-
-
-    def _get_alternative_codes(
-        self, 
-        course_code: str,
-        admission_year: int = None 
-    ) -> List[Dict]:
-        """
-        동일대체 교과목 목록 조회 (입학년도 이후만)
-        """
-        try:
-            query = supabase.table('equivalent_courses')\
-                .select('new_course_code, new_course_name, mapping_type, effective_year')\
-                .eq('old_course_code', course_code)
-            
-            # 입학년도 이후만 필터링
-            if admission_year:
-                query = query.gt('effective_year', admission_year)
-            
-            result = query.execute()
-            
-            if result.data:
-                seen = set()
-                alternatives = []
-                
-                for row in result.data:
-                    new_code = row['new_course_code']
-                    
-                    if new_code not in seen:
-                        seen.add(new_code)
-                        alternatives.append({
-                            'code': new_code,
-                            'name': row['new_course_name'],
-                            'type': row['mapping_type'],
-                            'year': row.get('effective_year')
-                        })
-                
-                return alternatives
-            return []
-        except Exception as e:
-            print(f"❌ 동일대체 교과목 조회 실패: {e}")
-            return []
-        
+    #2. 미이수 과목 포맷팅(폼)    
     def format_not_taken_courses(
         self,
         not_taken: List[Dict],

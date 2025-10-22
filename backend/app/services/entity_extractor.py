@@ -44,55 +44,79 @@ class EntityExtractor:
         return [code.upper() for code in set(codes)]
     
     def extract_course_names(self, message: str) -> List[str]:
-        """과목명 추출 (개선: 중복 제거, 앞뒤 불용어 제거)"""
+        """
+        과목명 추출
         
-        # 1. 전처리: 학번 정보 제거
+        예시:
+        "컴퓨터과학과 창업과진로, 명저읽기 들었어"
+        → ["컴퓨터과학", "창업과진로", "명저읽기"]
+        """
+        
+        # ===== 1. 전처리: 학번 정보 제거 =====
         message = re.sub(r'(나는|저는|내가|제가)\s*\d{2,4}\s*학번\s*(이고|인데|이며)', '', message)
         message = re.sub(r'\d{2,4}\s*학번\s*(이고|인데|이며)', '', message)
         
-        # 2. 전처리: 뒤에 붙는 "수업 들었어" 제거
-        message = re.sub(r'(수업|과목)\s*(들었어|이수했어|수강했어)\.?$', '', message)
+        # ===== 2. 전처리: 과목 리스트 시작 문구 제거 =====
+        message = re.sub(r'(내가|제가|나는|저는)?\s*(들은|수강한|이수한)\s*(과목은|수업은|과목들은)', '', message)
+        message = re.sub(r'(과목은|수업은)', '', message)
+        
+        # ===== 3. 전처리: 뒤 불용어 제거 =====
+        message = re.sub(r'(수업|과목)?\s*(들었어|이수했어|수강했어|들었습니다|이수했습니다)[\.?!]*', '', message)
+        message = re.sub(r'[\.?!]+', '', message)
+        message = re.sub(r'(졸업사정|졸업)\s*(해줘|부탁해|알려줘)', '', message)
         
         # 불용어
         stopwords = [
             '들었', '수강했', '이수했', '들', '어', '고', '이랑', '과',
             '하고', '그리고', '학번', '인데', '알려줘', '남은', '학점',
-            '졸업', '요건', '뭐', '무엇', '수업', '과목', '나는', '저는'
+            '졸업', '요건', '뭐', '무엇', '수업', '과목', '나는', '저는',
+            '내가', '제가'
         ]
         
-        # 쉼표로 분리
+        # ===== 4. 쉼표로 분리 =====
         words = re.split(r'[,\n]+', message)
         
         course_names = []
         seen = set()  # 중복 제거용
         
+        # ===== 5. 각 단어 처리 =====
         for word in words:
-            # 양쪽 공백 제거
             word = word.strip()
             
-            # 조사 제거
-            word = re.sub(r'(이랑|과|와|랑|을|를|이|가)\s*$', '', word)
-            word = word.strip()
+            sub_words = []
             
-            # 뒤에 붙은 불용어 제거
-            for stop in stopwords:
-                if word.endswith(stop):
-                    word = word[:-len(stop)].strip()
+            # "컴퓨터과학과 창업과진로" → ["컴퓨터과학", "창업과진로"]
+            if re.search(r'[가-힣]+과\s+[가-힣]+', word):
+                sub_words = re.split(r'과\s+', word)
+            else:
+                sub_words = [word]
             
-            # 앞에 붙은 불용어 제거
-            for stop in ['나는', '저는', '내가', '제가']:
-                if word.startswith(stop):
-                    word = word[len(stop):].strip()
+            for sub_word in sub_words:
+                sub_word = sub_word.strip()
             
-            # 최소 길이 + 한글 포함 + 불용어 아님
-            if len(word) >= 3 and word not in stopwords:
-                if re.search(r'[가-힣]', word):
-                    # 중복 체크 (정규화된 버전)
-                    normalized = word.replace(' ', '').lower()
-                    if normalized not in seen:
-                        seen.add(normalized)
-                        course_names.append(word)
-        
+                # 조사 제거 (끝에만)
+                sub_word = re.sub(r'(이랑|과|와|랑|을|를|이|가)\s*$', '', sub_word)
+                sub_word = sub_word.strip()
+                
+                # 뒤에 붙은 불용어 제거
+                for stop in stopwords:
+                    if sub_word.endswith(stop):
+                        sub_word = sub_word[:-len(stop)].strip()
+                
+                # 앞에 붙은 불용어 제거
+                for stop in ['나는', '저는', '내가', '제가', '들은', '수강한', '이수한']:
+                    if sub_word.startswith(stop):
+                        sub_word = sub_word[len(stop):].strip()
+                
+                # 최소 길이 + 한글 포함 + 불용어 아님
+                if len(sub_word) >= 3 and sub_word not in stopwords:
+                    if re.search(r'[가-힣]', sub_word):
+                        # 중복 체크
+                        normalized = sub_word.replace(' ', '').lower()
+                        if normalized not in seen:
+                            seen.add(normalized)
+                            course_names.append(sub_word)
+    
         return course_names
     
     def search_course_by_name(
