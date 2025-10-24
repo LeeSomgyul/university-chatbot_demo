@@ -13,16 +13,24 @@ const api = axios.create({
 export const chatAPI = {
   // 채팅 메시지 전송
   sendMessage: async (request: ChatRequest): Promise<ChatResponse> => {
+    
+    const storedSessionId = sessionStorage.getItem('chat_session_id');
     const cleanRequest = {
       message: request.message,
-      session_id: null,  // ⭐ 항상 null
-      user_profile: null,  // ⭐ 항상 null
-      history: request.history || []
+      session_id: storedSessionId,
+      user_profile: null, 
+      history: []
     };
 
     console.log('📤 전송 데이터:', cleanRequest);
 
     const response = await api.post<ChatResponse>('/chat', cleanRequest);
+
+    if (response.data.session_id) {
+      sessionStorage.setItem('chat_session_id', response.data.session_id);
+      console.log('💾 세션 ID 저장:', response.data.session_id);
+    }
+    
     return response.data;
   },
 

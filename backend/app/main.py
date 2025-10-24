@@ -109,17 +109,35 @@ async def chat(request: ChatRequest):
                 
         user_profile = request.user_profile if request.user_profile else session_profile
         
+        session_store.add_message(session_id, {
+            "role": "user",
+            "content": request.message,
+            "timestamp": datetime.now()
+        })
+        
+        session_messages = session.get('history', []) if session else []
+        
+        history_for_llm = []
+        for msg in session_messages[:-1]:
+            history_for_llm.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
+        
+        print(f"\n💬 대화 이력 ({len(history_for_llm)}개 메시지):")
+        for msg in history_for_llm[-6:]:  # 최근 6개만 출력
+            print(f"  {msg['role']}: {msg['content'][:50]}...")
+        
         print(f"\n📨 요청 정보:")
         print(f"  session_id: {session_id}")
-        print(f"  request.user_profile: {request.user_profile}")
-        print(f"  session_profile: {session_profile}")
-        print(f"  final user_profile: {user_profile}")
+        print(f"  현재 메시지: {request.message}")
+        print(f"  user_profile: {user_profile}")
         
         # 챗봇 호출
         result = chatbot.chat(
             message=request.message,
             user_profile=user_profile,
-            history=request.history
+            history=history_for_llm
         )
 
         if isinstance(result, dict) and 'user_profile' in result and result['user_profile']:
@@ -127,11 +145,6 @@ async def chat(request: ChatRequest):
             print(f"  ✅ 세션에 프로필 저장: {result['user_profile'].admission_year}학번")
         
         # 세션에 메시지 저장
-        session_store.add_message(session_id, {
-            "role": "user",
-            "content": request.message,
-            "timestamp": datetime.now()
-        })
         session_store.add_message(session_id, {
             "role": "assistant",
             "content": result['message'],

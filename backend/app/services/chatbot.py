@@ -41,13 +41,16 @@ class SchoolChatbot:
     ) -> Dict[str, Any]:
         """메인 챗봇 로직"""
         
+        if history is None:
+            history = []
+        
         # 1. 질문 분류
         query_type = query_router.classify(message)
         needs_profile = query_router.needs_user_profile(message)
         
         # 2. general 질문 처리 (벡터 DB)
         if query_type == "general":
-            return self._handle_general_query(message)
+            return self._handle_general_query(message, history)
         
         # 3. curriculum 질문 처리 (관계형 DB)
         if query_type == "curriculum":
@@ -63,7 +66,7 @@ class SchoolChatbot:
                 )
                 print(f"✅ UserProfile 자동 생성: {extracted['admission_year']}학번, {len(extracted['courses'])}과목")
                 
-                result = self._handle_curriculum_query(message, user_profile)
+                result = self._handle_curriculum_query(message, user_profile, history)
                 result['user_profile'] = user_profile
                 return result
             
@@ -76,12 +79,12 @@ class SchoolChatbot:
                     courses_taken=[]
                 )
                 
-                return self._handle_curriculum_query(message, user_profile)
+                return self._handle_curriculum_query(message, user_profile, history)
             
             # 3-3. 기존 user_profile 있음 → 그대로 사용
             elif user_profile:
                 print(f"✅ 기존 UserProfile 사용: {user_profile.admission_year}학번")
-                return self._handle_curriculum_query(message, user_profile)
+                return self._handle_curriculum_query(message, user_profile, history)
             
             # 3-4. 정보 부족 → 안내 메시지
             else:
@@ -128,16 +131,20 @@ class SchoolChatbot:
     
         # 4. 기본값 (혹시 모를 경우)
         else:
-            return self._handle_general_query(message)
+            return self._handle_general_query(message, history)
         
     # ===== 3가지 핵심 기능 =====        
     # 1. 개인 졸업사정 → 폼 반환
     def _handle_curriculum_query(
         self, 
         message: str, 
-        user_profile: UserProfile
+        user_profile: UserProfile,
+        history: List = None
     ) -> Dict[str, Any]:
         """교육과정 질문 처리"""
+        
+        if history is None:
+            history = []
         
         # ===== 1. 동일대체 질문 =====
         if any(kw in message for kw in ['대신', '대체', '바뀐', '과목명', '같은', '동일대체', '변경']):
@@ -459,10 +466,91 @@ class SchoolChatbot:
             }    
         
     # ===== 일반 정보 =====
-    def _handle_general_query(self, message: str) -> Dict[str, Any]:
+    def _handle_general_query(self, message: str, history: List = None) -> Dict[str, Any]:
         """일반 정보 질문 처리 (벡터 검색)"""
+        
+        #이전 질문 저장
+        if history is None:
+            history = []
+        
+        # 이전 대화 있다면 쿼리 재구성    
+        search_query = message
+        
+        # 이전 대화가 있을 때만
+        if history:  
+            try:
+                # 대화 이력 텍스트로 변환
+                history_text = ""
+                for msg in history[-4:]:  # 최근 4개만
+                    role = "학생" if msg["role"] == "user" else "챗봇"
+                    history_text += f"{role}: {msg['content']}\n"
+                
+                # 쿼리 재구성 프롬프트
+                rewrite_prompt = ChatPromptTemplate.from_messages([
+                    ("system", """당신은 검색 쿼리를 개선하는 전문가입니다.
+    이전 대화를 보고, 사용자의 현재 질문을 벡터 검색에 적합한 명확한 쿼리로 재구성하세요.
+
+    규칙:
+    1. "그거", "그 과목", "그것" 같은 대명사를 이전 대화의 구체적인 명사로 바꾸세요
+    2. 이전에 언급된 과목명, 주제를 포함하세요
+    3. 검색에 유용한 핵심 키워드만 남기세요
+    4. 한 줄로 간결하게 작성하세요
+    5. 재구성된 쿼리만 출력하세요 (설명 없이)
+
+    예시 1 (과목):
+    이전 대화:
+    학생: 그림 관련 교양 추천해줘
+    챗봇: 미술의 이해를 추천합니다
+
+    현재 질문: 과목코드 어떻게 돼?
+    출력: 미술의 이해 과목코드
+
+    예시 2 (시설):
+    이전 대화:
+    학생: 도서관 위치 어디야?
+    챗봇: 중앙도서관은 본관 옆에 있어요
+
+    현재 질문: 거기 운영시간은?
+    출력: 중앙도서관 운영시간
+
+    예시 3 (연락처):
+    이전 대화:
+    학생: 학생지원팀 연락처 알려줘
+    챗봇: 학생지원팀은 061-750-3114입니다
+
+    현재 질문: 거기 위치는?
+    출력: 학생지원팀 위치
+
+    예시 4 (일반):
+    이전 대화:
+    학생: 철학 교양 추천해줘
+    챗봇: 철학으로 문화읽기 추천해요
+
+    현재 질문: 다른거 없어?
+    출력: 철학 교양과목 추천"""),
+        ("user", f"""이전 대화:
+    {history_text}
+
+    현재 질문: {message}
+
+    재구성된 검색 쿼리:""")
+                ])
+                
+                llm = self._get_llm()
+                rewrite_chain = rewrite_prompt | llm
+                rewrite_response = rewrite_chain.invoke({})
+                search_query = rewrite_response.content.strip()
+                
+                print(f"\n🔍 쿼리 재구성:")
+                print(f"  원본: {message}")
+                print(f"  재구성: {search_query}")
+                
+            except Exception as e:
+                print(f"⚠️ 쿼리 재구성 실패, 원본 사용: {e}")
+                search_query = message
+        
         # 벡터 검색
-        search_results = self.vector_service.search(message, k=3)
+        search_results = self.vector_service.search(search_query, k=3)
         
         if not search_results:
             return {
@@ -476,39 +564,46 @@ class SchoolChatbot:
         context = self.vector_service.format_search_results(search_results)
         
         # LLM 프롬프트
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """당신은 순천대학교 컴퓨터공학과 안내 챗봇입니다.
-            주어진 정보를 바탕으로 학생의 질문에 친절하고 정확하게 답변해주세요.
+        messages = [
+        ("system", f"""당신은 순천대학교 컴퓨터공학과 안내 챗봇입니다.
+주어진 정보를 바탕으로 학생의 질문에 친절하고 정확하게 답변해주세요.
 
-            답변 규칙:
-            1. 존댓말을 사용하고 친근하게 답변하세요
-            2. 주어진 정보에 없는 내용은 "검색된 정보에서 찾을 수 없어요"라고 솔직히 말하세요
-            3. 답변은 간결하게 핵심만 전달하세요
-            4. 필요시 이모지를 활용해 친근함을 더하세요
-            5. 마크다운 문법(**, ##, - 등)을 사용하지 마세요. 순수 텍스트와 이모지만 사용하세요
-            6. 검색된 정보를 그대로 나열하지 말고, 질문에 맞춰 재구성하세요
+답변 규칙:
+1. 존댓말을 사용하고 친근하게 답변하세요
+2. 주어진 정보에 없는 내용은 "검색된 정보에서 찾을 수 없어요"라고 솔직히 말하세요
+3. 답변은 간결하게 핵심만 전달하세요
+4. 필요시 이모지를 활용해 친근함을 더하세요
+5. 마크다운 문법(**, ##, - 등)을 사용하지 마세요. 순수 텍스트와 이모지만 사용하세요
+6. 검색된 정보를 그대로 나열하지 말고, 질문에 맞춰 재구성하세요
+7. 이전 대화 맥락을 고려하여 답변하세요. "그거", "그 과목" 같은 표현이 나오면 이전 대화에서 언급된 내용을 참조하세요
 
-            검색된 정보:
-            {context}
-            """),
-            ("user", "{question}")
-        ])
+검색된 정보:
+{context}
+""")
+    ]
+        # 이전 대화 이력
+        for msg in history:
+            if msg["role"] == "user":
+                messages.append(("user", msg["content"]))
+            elif msg["role"] == "assistant":
+                messages.append(("assistant", msg["content"]))
+                
+        # 현재 질문        
+        messages.append(("user", message))
+        
+        prompt = ChatPromptTemplate.from_messages(messages)
         
         # LLM 호출
         llm = self._get_llm()
         chain = prompt | llm
         
         try:
-            response = chain.invoke({
-                "context": context,
-                "question": message
-            })
-            
+            response = chain.invoke({})
             answer = response.content
         except Exception as e:
             print(f"❌ LLM 호출 실패: {e}")
             import traceback
-            traceback.print_exc()  # ← 디버깅용 추가
+            traceback.print_exc()
             
             # 검색 결과가 있으면 최소한의 정보라도 제공
             if search_results:
